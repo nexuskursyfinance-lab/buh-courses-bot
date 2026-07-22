@@ -1,0 +1,17 @@
+# Telegram бот
+aiogram==3.13.1
+
+# Веб-сервер для webhook LiqPay
+aiohttp==3.10.10
+
+# Завантаження .env файлу
+python-dotenv==1.0.1
+
+# Генерація PDF
+reportlab==4.2.5
+
+# Heroku: production WSGI server
+gunicorn==23.0.0
+
+# Heroku Postgres (замість SQLite у продакшені)
+psycopg2-binary==2.9.10
