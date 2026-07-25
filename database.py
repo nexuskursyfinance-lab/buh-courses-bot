@@ -103,6 +103,14 @@ def init_db():
                 telegram_id BIGINT NOT NULL, action TEXT NOT NULL,
                 count INTEGER DEFAULT 1, window_start TIMESTAMPTZ DEFAULT NOW(),
                 PRIMARY KEY (telegram_id, action))""")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS purchases (
+                id SERIAL PRIMARY KEY, telegram_id BIGINT NOT NULL,
+                item_type TEXT NOT NULL, item_id INTEGER NOT NULL,
+                purchased_at TIMESTAMPTZ DEFAULT NOW())""")
+        cur.execute("ALTER TABLE questions ADD COLUMN IF NOT EXISTS price NUMERIC(10,2) DEFAULT 99.00")
+        cur.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS item_type TEXT DEFAULT 'topic_bundle'")
+        cur.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS item_id INTEGER")
         conn.commit()
         cur.close()
     else:
@@ -132,6 +140,24 @@ def init_db():
             telegram_id INTEGER NOT NULL, action TEXT NOT NULL,
             count INTEGER DEFAULT 1, window_start TEXT DEFAULT (datetime('now')),
             PRIMARY KEY (telegram_id, action))""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS purchases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL,
+            item_type TEXT NOT NULL, item_id INTEGER NOT NULL,
+            purchased_at TEXT DEFAULT (datetime('now')))""")
+        # SQLite не підтримує "ADD COLUMN IF NOT EXISTS" — ловимо помилку,
+        # якщо колонка вже існує (при повторному запуску init_db)
+        try:
+            cur.execute("ALTER TABLE questions ADD COLUMN price REAL DEFAULT 99.00")
+        except Exception:
+            pass
+        try:
+            cur.execute("ALTER TABLE payments ADD COLUMN item_type TEXT DEFAULT 'topic_bundle'")
+        except Exception:
+            pass
+        try:
+            cur.execute("ALTER TABLE payments ADD COLUMN item_id INTEGER")
+        except Exception:
+            pass
         conn.commit()
     conn.close()
     log.info("✅ БД ініціалізована")
@@ -182,6 +208,8 @@ def get_user(telegram_id: int):
 
 
 def set_user_access(telegram_id: int, has_access: int = 1):
+    """Залишено для сумісності зі старим кодом (глобальний прапорець доступу).
+    Для нової по-товарної моделі використовуй grant_access() / has_purchased()."""
     conn = get_connection()
     _exec(conn, f"UPDATE users SET has_access={ph()} WHERE telegram_id={ph()}", (has_access, telegram_id))
     conn.close()
@@ -225,24 +253,45 @@ def get_questions_by_topic(topic_id: int):
     return rows
 
 
-def create_payment(telegram_id: int, order_id: str, amount: float):
+def get_question_by_id(question_id: int):
+    """Повертає одне питання за його id — потрібно для продажу окремого питання."""
     conn = get_connection()
-    _exec(conn, f"INSERT INTO payments (telegram_id, order_id, amount) VALUES ({placeholder(3)})", (telegram_id, order_id, amount))
+    row = _fetchone(conn, f"SELECT * FROM questions WHERE id={ph()}", (question_id,))
+    conn.close()
+    return row
+
+
+def create_payment(telegram_id: int, order_id: str, amount: float,
+                    item_type: str = "topic_bundle", item_id: int = None):
+    conn = get_connection()
+    _exec(
+        conn,
+        f"INSERT INTO payments (telegram_id, order_id, amount, item_type, item_id) VALUES ({placeholder(5)})",
+        (telegram_id, order_id, amount, item_type, item_id),
+    )
     conn.close()
 
 
 def confirm_payment(order_id: str, liqpay_data: str):
+    """Підтверджує оплату і надає доступ саме до купленого товару
+    (item_type / item_id), а не глобальний доступ до всього."""
     conn = get_connection()
     p = ph()
     if USE_POSTGRES:
         _exec(conn, f"UPDATE payments SET status='success', liqpay_data={p}, paid_at=NOW() WHERE order_id={p}", (liqpay_data, order_id))
     else:
         _exec(conn, f"UPDATE payments SET status='success', liqpay_data={p}, paid_at=datetime('now') WHERE order_id={p}", (liqpay_data, order_id))
-    row = _fetchone(conn, f"SELECT telegram_id FROM payments WHERE order_id={p}", (order_id,))
+    row = _fetchone(conn, f"SELECT telegram_id, item_type, item_id FROM payments WHERE order_id={p}", (order_id,))
     conn.close()
     if row:
         tid = row["telegram_id"]
-        set_user_access(tid, 1)
+        item_type = row["item_type"] or "topic_bundle"
+        item_id = row["item_id"]
+        if item_id is not None:
+            grant_access(tid, item_type, item_id)
+        else:
+            # запасний варіант для старих замовлень без item_id — старий поведінка
+            set_user_access(tid, 1)
         return tid
     return None
 
@@ -252,3 +301,45 @@ def get_payment_by_order(order_id: str):
     row = _fetchone(conn, f"SELECT * FROM payments WHERE order_id={ph()}", (order_id,))
     conn.close()
     return row
+
+
+# =====================================================================
+# ПО-ТОВАРНИЙ ДОСТУП (нове): одне гаряче питання або пакет теми
+# =====================================================================
+
+def has_purchased(telegram_id: int, item_type: str, item_id: int) -> bool:
+    """Перевіряє, чи купив користувач конкретний товар:
+    item_type = 'question'      → окреме гаряче питання (item_id = questions.id)
+    item_type = 'topic_bundle'  → весь пакет теми (item_id = topics.id)
+    """
+    conn = get_connection()
+    row = _fetchone(
+        conn,
+        f"SELECT 1 FROM purchases WHERE telegram_id={ph()} AND item_type={ph()} AND item_id={ph()}",
+        (telegram_id, item_type, item_id),
+    )
+    conn.close()
+    return row is not None
+
+
+def grant_access(telegram_id: int, item_type: str, item_id: int):
+    """Записує факт покупки конкретного товару користувачем."""
+    conn = get_connection()
+    _exec(
+        conn,
+        f"INSERT INTO purchases (telegram_id, item_type, item_id) VALUES ({placeholder(3)})",
+        (telegram_id, item_type, item_id),
+    )
+    conn.close()
+
+
+def get_user_purchases(telegram_id: int):
+    """Повертає всі покупки користувача — зручно для /mystatus."""
+    conn = get_connection()
+    rows = _fetch(
+        conn,
+        f"SELECT * FROM purchases WHERE telegram_id={ph()} ORDER BY purchased_at DESC",
+        (telegram_id,),
+    )
+    conn.close()
+    return rows
