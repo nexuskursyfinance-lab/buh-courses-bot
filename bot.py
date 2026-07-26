@@ -1,6 +1,7 @@
 """
-Головний файл Telegram-бота «Бухгалтерські курси»
+Головний файл Telegram-бота «Бухгалтерські лайфхаки»
 Фреймворк: aiogram 3.x
+Модель продажу: кожне гаряче питання продається окремо за 99 грн.
 Запуск: python bot.py
 """
 import asyncio
@@ -10,12 +11,12 @@ import uuid
 from io import BytesIO
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton,
-    BufferedInputFile,
+    InlineKeyboardMarkup,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -26,12 +27,12 @@ load_dotenv()
 
 from database import (
     init_db, upsert_user, get_user,
-    get_all_topics, get_subtopics, get_questions_by_topic,
+    get_all_topics, get_subtopics, get_questions_by_topic, get_question_by_id,
     create_payment, confirm_payment, get_payment_by_order,
     check_rate_limit, get_stats,
+    has_purchased, get_user_purchases,
 )
 from liqpay_helper import generate_payment_url
-from pdf_generator import generate_pdf
 
 # --- Налаштування ---
 logging.basicConfig(
@@ -44,21 +45,27 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("❌ BOT_TOKEN не знайдено у .env файлі!")
 
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp  = Dispatcher()
 
-PRICE_TEXT = "99 грн"
+# Ціна тепер індивідуальна для кожного питання (беремо з q['price']) —
+# більше немає єдиної фіксованої суми на всі питання.
 # ID адміністратора — отримай свій через @userinfobot у Telegram
-ADMIN_ID   = int(os.getenv("ADMIN_ID", "0"))
-# Ліміт: скільки разів на годину користувач може запитати PDF
-PDF_RATE_LIMIT = int(os.getenv("PDF_RATE_LIMIT", "10"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
+# Посилання на публічну оферту — показуємо перед кожною оплатою
+OFFER_URL = os.getenv(
+    "OFFER_URL",
+    "https://docs.google.com/document/d/1R28gdhIqzg1-DjVdcVWJ6bhzDH5aUbbEn6rfPBT8Whs/view",
+)
 
 # =====================================================================
 # КЛАВІАТУРИ
 # =====================================================================
 
 def kb_main_menu() -> InlineKeyboardMarkup:
-    """Головне меню: список тем + кнопка купити"""
+    """Головне меню: список тем.
+    Продажу «всього пакету одразу» немає — кожне питання купується окремо."""
     builder = InlineKeyboardBuilder()
     topics = get_all_topics()
     for t in topics:
@@ -66,8 +73,7 @@ def kb_main_menu() -> InlineKeyboardMarkup:
             text=f"{t['emoji']} {t['title']}",
             callback_data=f"topic:{t['id']}"
         )
-    builder.button(text=f"💳 Купити всі теми за {PRICE_TEXT}", callback_data="buy")
-    builder.adjust(1)  # по одній кнопці в рядку
+    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -80,37 +86,52 @@ def kb_topic(topic_id: int) -> InlineKeyboardMarkup:
             text=f"📂 {s['title']}",
             callback_data=f"subtopic:{topic_id}:{s['id']}"
         )
-    # Кнопка «отримати всі питання теми одним PDF»
-    builder.button(
-        text="📥 Отримати всі питання теми (PDF)",
-        callback_data=f"pdf:{topic_id}"
-    )
     builder.button(text="⬅️ Назад до тем", callback_data="menu")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def kb_buy() -> InlineKeyboardMarkup:
-    """Кнопки на екрані покупки"""
+def kb_question_list(topic_id: int, subtopic_id: int, telegram_id: int) -> InlineKeyboardMarkup:
+    """Список питань підтеми. Куплені питання позначені ✅, некуплені — 🔒 з ціною."""
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"💳 Оплатити {PRICE_TEXT}", callback_data="confirm_buy")
-    builder.button(text="⬅️ Назад", callback_data="menu")
+    all_questions = get_questions_by_topic(topic_id)
+    qs = [q for q in all_questions if q["subtopic_id"] == subtopic_id]
+
+    for q in qs:
+        short = q["question"]
+        if len(short) > 45:
+            short = short[:42] + "…"
+        if has_purchased(telegram_id, "question", q["id"]):
+            builder.button(text=f"✅ {short}", callback_data=f"showq:{q['id']}")
+        else:
+            builder.button(text=f"🔒 {short} — {q['price']} грн", callback_data=f"buyq:{q['id']}")
+
+    builder.button(text="⬅️ Назад до теми", callback_data=f"topic:{topic_id}")
+    builder.button(text="🏠 Головне меню",  callback_data="menu")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def kb_after_buy(pay_url: str) -> InlineKeyboardMarkup:
-    """Кнопка-посилання на оплату LiqPay"""
+def kb_after_answer(topic_id: int, subtopic_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"💳 Перейти до оплати ({PRICE_TEXT})", url=pay_url)
-    builder.button(text="✅ Я вже оплатив(ла)", callback_data="check_payment")
-    builder.button(text="⬅️ Назад", callback_data="menu")
+    builder.button(text="⬅️ Назад до питань", callback_data=f"subtopic:{topic_id}:{subtopic_id}")
+    builder.button(text="🏠 Головне меню",    callback_data="menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def kb_buy_question(pay_url: str, question_id: int, price) -> InlineKeyboardMarkup:
+    """Кнопки на екрані покупки конкретного питання"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"💳 Перейти до оплати ({price} грн)", url=pay_url)
+    builder.button(text="✅ Я вже оплатив(ла)", callback_data=f"checkq:{question_id}")
+    builder.button(text="⬅️ Назад", callback_data=f"backtoq:{question_id}")
     builder.adjust(1)
     return builder.as_markup()
 
 
 # =====================================================================
-# HANDLERS: /start та /help
+# HANDLERS: /start, /menu, /mystatus
 # =====================================================================
 
 @dp.message(CommandStart())
@@ -118,7 +139,6 @@ async def cmd_start(message: Message):
     """Обробник команди /start — реєстрація + привітання"""
     user = message.from_user
 
-    # Зберігаємо або оновлюємо користувача в БД
     upsert_user(
         telegram_id=user.id,
         username=user.username,
@@ -129,12 +149,13 @@ async def cmd_start(message: Message):
 
     await message.answer(
         f"👋 Привіт, <b>{user.first_name}</b>!\n\n"
-        "Ласкаво просимо до <b>Бухгалтерських курсів</b> 📚\n\n"
-        "Тут ти знайдеш <b>100+ практичних питань</b> з бухобліку:\n"
+        "Ласкаво просимо до <b>Бухгалтерських лайфхаків</b> 🧾\n\n"
+        "Тут ти знайдеш <b>практичні гарячі питання</b> з бухобліку:\n"
         "• 💰 Податки та штрафи\n"
         "• 👩‍💼 Зарплата та кадри\n"
         "• 🏦 ЄСВ та звітність\n\n"
-        "💡 Вибери тему нижче або <b>купи повний пакет</b> за 99 грн 👇",
+        f"💡 Обери тему нижче. Кожне питання має свою ціну (99–199 грн залежно від складності) — "
+        "платиш тільки за те, що реально потрібно 👇",
         reply_markup=kb_main_menu(),
     )
 
@@ -147,17 +168,17 @@ async def cmd_menu(message: Message):
 
 @dp.message(Command("mystatus"))
 async def cmd_status(message: Message):
-    """Команда /mystatus — перевірити чи є доступ"""
-    user = get_user(message.from_user.id)
-    if user and user["has_access"]:
+    """Команда /mystatus — скільки питань уже куплено"""
+    purchases = get_user_purchases(message.from_user.id)
+    if purchases:
         await message.answer(
-            "✅ У вас є <b>повний доступ</b> до всіх матеріалів!\n"
-            "Оберіть тему через /menu"
+            f"✅ У вас куплено <b>{len(purchases)}</b> гарячих питань.\n"
+            "Оберіть тему через /menu, щоб переглянути їх або купити нові."
         )
     else:
         await message.answer(
-            "❌ Доступу ще немає.\n"
-            f"💳 Придбайте матеріали за <b>{PRICE_TEXT}</b> через /menu → Купити"
+            "❌ Ви ще нічого не купували.\n"
+            "💳 Ціна кожного гарячого питання вказана поруч з ним — обирайте тему через /menu"
         )
 
 
@@ -167,7 +188,6 @@ async def cmd_status(message: Message):
 
 @dp.callback_query(F.data == "menu")
 async def cb_menu(call: CallbackQuery):
-    """Повернення до головного меню"""
     await call.message.edit_text(
         "📚 <b>Оберіть тему:</b>",
         reply_markup=kb_main_menu()
@@ -177,17 +197,8 @@ async def cb_menu(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("topic:"))
 async def cb_topic(call: CallbackQuery):
-    """Відкриває меню конкретної теми"""
+    """Відкриває меню конкретної теми — перегляд тем і підтем безкоштовний"""
     topic_id = int(call.data.split(":")[1])
-
-    # Перевіряємо доступ
-    user = get_user(call.from_user.id)
-    if not user or not user["has_access"]:
-        await call.answer(
-            "🔒 Ця функція доступна після придбання!\nНатисни «Купити» в меню.",
-            show_alert=True
-        )
-        return
 
     topics = {t["id"]: t for t in get_all_topics()}
     topic  = topics.get(topic_id)
@@ -197,7 +208,7 @@ async def cb_topic(call: CallbackQuery):
 
     await call.message.edit_text(
         f"{topic['emoji']} <b>{topic['title']}</b>\n\n"
-        "Оберіть підтему або завантажте всі питання одразу:",
+        "Оберіть підтему:",
         reply_markup=kb_topic(topic_id)
     )
     await call.answer()
@@ -205,173 +216,172 @@ async def cb_topic(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("subtopic:"))
 async def cb_subtopic(call: CallbackQuery):
-    """Показує питання обраної підтеми"""
+    """Показує список питань підтеми — куплені відкриті, некуплені з цінником"""
     _, topic_id_str, subtopic_id_str = call.data.split(":")
     topic_id    = int(topic_id_str)
     subtopic_id = int(subtopic_id_str)
 
-    user = get_user(call.from_user.id)
-    if not user or not user["has_access"]:
-        await call.answer("🔒 Потрібна оплата!", show_alert=True)
-        return
-
     all_questions = get_questions_by_topic(topic_id)
-    # Фільтруємо за підтемою
     qs = [q for q in all_questions if q["subtopic_id"] == subtopic_id]
 
     if not qs:
         await call.answer("Питань у цій підтемі ще немає.", show_alert=True)
         return
 
-    # Формуємо текстову відповідь
     subtopics = get_subtopics(topic_id)
     sub_map   = {s["id"]: s["title"] for s in subtopics}
     sub_title = sub_map.get(subtopic_id, "Підтема")
 
-    text = f"📂 <b>{sub_title}</b>\n\n"
-    for i, q in enumerate(qs, 1):
-        text += f"<b>❓ {i}. {q['question']}</b>\n"
-        text += f"✅ {q['answer']}\n\n"
-        text += "─" * 30 + "\n\n"
-
-    builder = InlineKeyboardBuilder()
-    builder.button(text="⬅️ Назад до теми", callback_data=f"topic:{topic_id}")
-    builder.button(text="🏠 Головне меню",  callback_data="menu")
-    builder.adjust(1)
-
-    await call.message.edit_text(text, reply_markup=builder.as_markup())
+    await call.message.edit_text(
+        f"📂 <b>{sub_title}</b>\n\n"
+        f"👇 Обери питання. Ціна вказана біля кожного, куплені відкриваються одразу.",
+        reply_markup=kb_question_list(topic_id, subtopic_id, call.from_user.id)
+    )
     await call.answer()
 
 
 # =====================================================================
-# CALLBACKS: PDF завантаження
+# CALLBACKS: перегляд купленого питання
 # =====================================================================
 
-@dp.callback_query(F.data.startswith("pdf:"))
-async def cb_pdf(call: CallbackQuery):
-    """Генерує та надсилає PDF з усіма питаннями теми"""
-    topic_id = int(call.data.split(":")[1])
+@dp.callback_query(F.data.startswith("showq:"))
+async def cb_show_question(call: CallbackQuery):
+    """Показує питання+відповідь, якщо воно вже куплене"""
+    question_id = int(call.data.split(":")[1])
 
-    user = get_user(call.from_user.id)
-    if not user or not user["has_access"]:
-        await call.answer("🔒 Потрібна оплата!", show_alert=True)
+    if not has_purchased(call.from_user.id, "question", question_id):
+        await call.answer("🔒 Це питання ще не оплачено!", show_alert=True)
         return
 
-    # Перевірка rate limit (max 10 PDF на годину)
-    if not check_rate_limit(call.from_user.id, "pdf", PDF_RATE_LIMIT):
-        await call.answer(
-            f"⏳ Забагато запитів. Зачекайте годину та спробуйте знову.",
-            show_alert=True
-        )
+    q = get_question_by_id(question_id)
+    if not q:
+        await call.answer("Питання не знайдено", show_alert=True)
         return
 
-    await call.answer("⏳ Генерую PDF, зачекайте...")
-    await call.message.answer("⏳ Готую ваш PDF...")
-
-    topics = {t["id"]: t for t in get_all_topics()}
-    topic  = topics.get(topic_id)
-    qs     = get_questions_by_topic(topic_id)
-
-    if not qs:
-        await call.message.answer("На жаль, питань для цієї теми ще немає.")
-        return
-
-    # Генеруємо PDF
-    pdf_buffer = generate_pdf(topic["title"] if topic else "Питання", qs)
-    filename   = f"buh_questions_{topic_id}.pdf"
-
-    await call.message.answer_document(
-        document=BufferedInputFile(pdf_buffer.read(), filename=filename),
-        caption=(
-            f"✅ <b>{topic['title']}</b>\n"
-            f"📄 {len(qs)} питань з відповідями\n\n"
-            "Зберігай файл — він твій назавжди! 🎉"
-        )
+    text = (
+        f"<b>❓ {q['question']}</b>\n\n"
+        f"✅ {q['answer']}"
     )
-
-
-# =====================================================================
-# CALLBACKS: покупка
-# =====================================================================
-
-@dp.callback_query(F.data == "buy")
-async def cb_buy(call: CallbackQuery):
-    """Показує екран покупки"""
-    user = get_user(call.from_user.id)
-
-    # Якщо вже оплатив — одразу надаємо доступ до тем
-    if user and user["has_access"]:
-        await call.answer("✅ У вас вже є доступ!", show_alert=True)
-        await call.message.edit_text(
-            "✅ У вас вже є <b>повний доступ</b>!\nОберіть тему:",
-            reply_markup=kb_main_menu()
-        )
-        return
 
     await call.message.edit_text(
-        "💳 <b>Придбати повний пакет</b>\n\n"
-        "📦 Що ти отримаєш:\n"
-        "• 100+ питань з детальними відповідями\n"
-        "• 3 теми: Податки, Зарплата, ЄСВ\n"
-        "• PDF-файли для кожної теми\n"
-        "• Оновлення матеріалів безкоштовно\n\n"
-        f"💰 <b>Ціна: {PRICE_TEXT}</b> (одноразово)\n\n"
-        "Натисни «Оплатити» — тебе перенаправить на сторінку оплати LiqPay 👇",
-        reply_markup=kb_buy()
+        text,
+        reply_markup=kb_after_answer(q["topic_id"], q["subtopic_id"])
     )
     await call.answer()
 
 
-@dp.callback_query(F.data == "confirm_buy")
-async def cb_confirm_buy(call: CallbackQuery):
-    """Створює замовлення та надсилає посилання на оплату"""
+# =====================================================================
+# CALLBACKS: покупка окремого питання
+# =====================================================================
+
+@dp.callback_query(F.data.startswith("buyq:"))
+async def cb_buy_question(call: CallbackQuery):
+    """Показує екран покупки конкретного питання"""
+    question_id = int(call.data.split(":")[1])
     telegram_id = call.from_user.id
 
-    # Генеруємо унікальний order_id
-    order_id = f"buh_{telegram_id}_{uuid.uuid4().hex[:8]}"
+    if has_purchased(telegram_id, "question", question_id):
+        await call.answer("✅ Це питання вже куплено!", show_alert=True)
+        return
 
-    # Зберігаємо очікуваний платіж у БД
-    create_payment(telegram_id=telegram_id, order_id=order_id, amount=99.00)
+    q = get_question_by_id(question_id)
+    if not q:
+        await call.answer("Питання не знайдено", show_alert=True)
+        return
 
-    # Отримуємо URL оплати від LiqPay
-    pay_url = generate_payment_url(order_id=order_id, telegram_id=telegram_id)
+    if not check_rate_limit(telegram_id, "buy_attempt", 20):
+        await call.answer("⏳ Забагато спроб. Зачекайте трохи.", show_alert=True)
+        return
 
-    log.info(f"Створено замовлення {order_id} для user {telegram_id}")
+    # Генеруємо унікальний order_id саме для цього питання
+    order_id = f"q{question_id}_{telegram_id}_{uuid.uuid4().hex[:8]}"
+    price = q["price"]
+
+    create_payment(
+        telegram_id=telegram_id,
+        order_id=order_id,
+        amount=price,
+        item_type="question",
+        item_id=question_id,
+    )
+
+    short_desc = q["question"]
+    if len(short_desc) > 60:
+        short_desc = short_desc[:57] + "…"
+
+    pay_url = generate_payment_url(
+        order_id=order_id,
+        telegram_id=telegram_id,
+        description=f"Гаряче питання: {short_desc}",
+    )
+
+    log.info(f"Створено замовлення {order_id} для user {telegram_id}, question {question_id}, ціна {price} грн")
 
     await call.message.edit_text(
-        f"💳 <b>Оплата {PRICE_TEXT}</b>\n\n"
+        f"💳 <b>Оплата питання ({price} грн)</b>\n\n"
+        f"❓ {q['question']}\n\n"
         "1️⃣ Натисни кнопку нижче\n"
         "2️⃣ Оплати карткою на сайті LiqPay\n"
         "3️⃣ Поверніться сюди — доступ відкриється автоматично\n\n"
-        "⚡ Після оплати доступ відкривається <b>миттєво</b>!",
-        reply_markup=kb_after_buy(pay_url)
+        "⚡ Після оплати відповідь відкривається <b>миттєво</b>!\n\n"
+        f"📄 Оплачуючи, ви погоджуєтесь з <a href=\"{OFFER_URL}\">умовами договору оферти</a>.",
+        reply_markup=kb_buy_question(pay_url, question_id, price),
+        disable_web_page_preview=True,
     )
     await call.answer()
 
 
-@dp.callback_query(F.data == "check_payment")
-async def cb_check_payment(call: CallbackQuery):
-    """
-    Ручна перевірка оплати.
-    У продакшені платіж підтверджується автоматично через webhook.
-    """
-    user = get_user(call.from_user.id)
-    if user and user["has_access"]:
+@dp.callback_query(F.data.startswith("checkq:"))
+async def cb_check_question_payment(call: CallbackQuery):
+    """Ручна перевірка оплати конкретного питання.
+    У продакшені доступ відкривається автоматично через webhook LiqPay —
+    ця кнопка потрібна на випадок, якщо людина повернулась раніше, ніж прийшов webhook."""
+    question_id = int(call.data.split(":")[1])
+
+    if has_purchased(call.from_user.id, "question", question_id):
+        q = get_question_by_id(question_id)
         await call.answer("✅ Оплату підтверджено!", show_alert=True)
         await call.message.edit_text(
-            "🎉 <b>Дякуємо за покупку!</b>\n\n"
-            "Тепер у тебе є доступ до всіх матеріалів.\n"
-            "Оберіть тему нижче 👇",
-            reply_markup=kb_main_menu()
+            f"🎉 <b>Дякуємо за покупку!</b>\n\n"
+            f"<b>❓ {q['question']}</b>\n\n"
+            f"✅ {q['answer']}",
+            reply_markup=kb_after_answer(q["topic_id"], q["subtopic_id"])
         )
     else:
         await call.answer(
             "❌ Оплату ще не знайдено.\n\n"
-            "Якщо ти щойно оплатив(ла), зачекай 1-2 хвилини та спробуй ще раз.\n"
-            "Або напиши нам: @support_username",
+            "Якщо ти щойно оплатив(ла), зачекай 1-2 хвилини та спробуй ще раз.",
             show_alert=True
         )
 
+
+@dp.callback_query(F.data.startswith("backtoq:"))
+async def cb_back_to_question(call: CallbackQuery):
+    """Повернення з екрану оплати назад до списку питань підтеми"""
+    question_id = int(call.data.split(":")[1])
+    q = get_question_by_id(question_id)
+    if not q:
+        await call.message.edit_text("📚 <b>Оберіть тему:</b>", reply_markup=kb_main_menu())
+        await call.answer()
+        return
+
+    all_questions = get_questions_by_topic(q["topic_id"])
+    qs = [x for x in all_questions if x["subtopic_id"] == q["subtopic_id"]]
+    subtopics = get_subtopics(q["topic_id"])
+    sub_map   = {s["id"]: s["title"] for s in subtopics}
+    sub_title = sub_map.get(q["subtopic_id"], "Підтема")
+
+    await call.message.edit_text(
+        f"📂 <b>{sub_title}</b>\n\n"
+        f"👇 Обери питання. Ціна вказана біля кожного, куплені відкриваються одразу.",
+        reply_markup=kb_question_list(q["topic_id"], q["subtopic_id"], call.from_user.id)
+    )
+    await call.answer()
+
+
+# =====================================================================
+# АДМІН: /stats
+# =====================================================================
 
 @dp.message(Command("stats"))
 async def cmd_stats(message: Message):

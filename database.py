@@ -1,254 +1,543 @@
 """
-Модуль для роботи з базою даних
-Підтримує SQLite (локально) та PostgreSQL (Heroku)
-Автоматично визначає тип БД за змінною DATABASE_URL
+database.py
+Схема бази даних проєкту "Бухгалтерські курси / Гарячі питання"
+
+Ця версія СУМІСНА з існуючим bot.py (з функціями upsert_user, get_all_topics,
+has_purchased, get_stats тощо) і водночас зберігає гнучку структуру тем,
+яку ми вже наповнили 27 імпортованими питаннями.
+
+При першому запуску після оновлення файл сам домиграє існуючу базу:
+- додасть emoji для тем;
+- створить підтему "Усі питання" для кожної теми;
+- прив'яже вже імпортовані питання до цієї підтеми;
+- підготує таблицю rate_limits для захисту від спаму.
+
+Нічого не видаляється і не перезаписується — тільки додається.
+
+Запуск: python database.py
 """
+
 import os
-import logging
+import sqlite3
+from datetime import datetime, timedelta
 
-log = logging.getLogger(__name__)
-
-DATABASE_URL = os.getenv("DATABASE_URL", "")
-DB_PATH      = os.getenv("DB_PATH", "buh_courses.db")
-USE_POSTGRES = DATABASE_URL.startswith(("postgres://", "postgresql://"))
+DATABASE_URL = os.environ.get("DATABASE_URL")
+USE_POSTGRES = bool(DATABASE_URL)
 
 if USE_POSTGRES:
     import psycopg2
     import psycopg2.extras
-    _PG_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-    log.info("🐘 БД: PostgreSQL (Heroku)")
-else:
-    import sqlite3
-    log.info(f"🗄  БД: SQLite ({DB_PATH})")
 
 
 def get_connection():
     if USE_POSTGRES:
-        return psycopg2.connect(_PG_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+        conn.cursor_factory = psycopg2.extras.RealDictCursor
+        return conn
     else:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect("bukhkursy.db")
         conn.row_factory = sqlite3.Row
         return conn
 
 
-def ph():
-    return "%s" if USE_POSTGRES else "?"
+def _rows_to_dicts(rows):
+    return [dict(r) for r in rows]
 
 
-def placeholder(n=1):
-    s = "%s" if USE_POSTGRES else "?"
-    return ",".join([s] * n)
+def _row_to_dict(row):
+    return dict(row) if row is not None else None
 
 
-def _exec(conn, sql, params=()):
-    """Виконує SQL для обох типів БД"""
-    if USE_POSTGRES:
-        cur = conn.cursor()
-        cur.execute(sql, params)
-        conn.commit()
-        cur.close()
-    else:
-        conn.execute(sql, params)
-        conn.commit()
+# ──────────────────────────────────────────────────────────────────────────
+# Базова схема (як і раніше — CREATE TABLE IF NOT EXISTS, безпечно повторно)
+# ──────────────────────────────────────────────────────────────────────────
 
+SCHEMA_SQLITE = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER UNIQUE NOT NULL,
+    username TEXT,
+    full_name TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 
-def _fetch(conn, sql, params=()):
-    if USE_POSTGRES:
-        cur = conn.cursor()
-        cur.execute(sql, params)
-        rows = cur.fetchall()
-        cur.close()
-        return rows
-    return conn.execute(sql, params).fetchall()
+CREATE TABLE IF NOT EXISTS topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    slug TEXT UNIQUE NOT NULL,
+    sort_order INTEGER DEFAULT 100,
+    is_active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 
+CREATE TABLE IF NOT EXISTS subtopics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_id INTEGER NOT NULL REFERENCES topics(id),
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    sort_order INTEGER DEFAULT 100,
+    is_active INTEGER DEFAULT 1,
+    UNIQUE(topic_id, slug)
+);
 
-def _fetchone(conn, sql, params=()):
-    if USE_POSTGRES:
-        cur = conn.cursor()
-        cur.execute(sql, params)
-        row = cur.fetchone()
-        cur.close()
-        return row
-    return conn.execute(sql, params).fetchone()
+CREATE TABLE IF NOT EXISTS questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_id INTEGER NOT NULL REFERENCES topics(id),
+    subtopic_id INTEGER REFERENCES subtopics(id),
+    slug TEXT UNIQUE NOT NULL,
+    title TEXT NOT NULL,
+    block_audience TEXT NOT NULL,
+    block_problem TEXT NOT NULL,
+    block_solution TEXT NOT NULL,
+    block_example TEXT NOT NULL,
+    block_mistakes TEXT NOT NULL,
+    block_checklist TEXT NOT NULL,
+    block_sources TEXT NOT NULL,
+    price INTEGER NOT NULL DEFAULT 99,
+    is_active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    slug TEXT UNIQUE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS question_tags (
+    question_id INTEGER NOT NULL REFERENCES questions(id),
+    tag_id INTEGER NOT NULL REFERENCES tags(id),
+    PRIMARY KEY (question_id, tag_id)
+);
+
+CREATE TABLE IF NOT EXISTS payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT UNIQUE NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(telegram_id),
+    item_type TEXT NOT NULL DEFAULT 'question',
+    item_id INTEGER NOT NULL,
+    amount REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    paid_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS rate_limits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+SCHEMA_POSTGRES = SCHEMA_SQLITE.replace(
+    "INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY"
+).replace(
+    "TEXT DEFAULT CURRENT_TIMESTAMP", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+)
 
 
 def init_db():
     conn = get_connection()
+    cur = conn.cursor()
+    schema = SCHEMA_POSTGRES if USE_POSTGRES else SCHEMA_SQLITE
     if USE_POSTGRES:
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY, telegram_id BIGINT UNIQUE NOT NULL,
-                username TEXT, full_name TEXT, phone TEXT,
-                has_access INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW())""")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS topics (
-                id SERIAL PRIMARY KEY, title TEXT NOT NULL,
-                emoji TEXT DEFAULT '📚', sort_order INTEGER DEFAULT 0)""")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS subtopics (
-                id SERIAL PRIMARY KEY, topic_id INTEGER NOT NULL REFERENCES topics(id), title TEXT NOT NULL)""")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS questions (
-                id SERIAL PRIMARY KEY, topic_id INTEGER NOT NULL REFERENCES topics(id),
-                subtopic_id INTEGER REFERENCES subtopics(id), question TEXT NOT NULL, answer TEXT NOT NULL)""")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS payments (
-                id SERIAL PRIMARY KEY, telegram_id BIGINT NOT NULL,
-                order_id TEXT UNIQUE NOT NULL, amount NUMERIC(10,2) NOT NULL,
-                status TEXT DEFAULT 'pending', liqpay_data TEXT,
-                created_at TIMESTAMPTZ DEFAULT NOW(), paid_at TIMESTAMPTZ)""")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS rate_limits (
-                telegram_id BIGINT NOT NULL, action TEXT NOT NULL,
-                count INTEGER DEFAULT 1, window_start TIMESTAMPTZ DEFAULT NOW(),
-                PRIMARY KEY (telegram_id, action))""")
-        conn.commit()
-        cur.close()
+        cur.execute(schema)
     else:
-        cur = conn.cursor()
-        cur.execute("""CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER UNIQUE NOT NULL,
-            username TEXT, full_name TEXT, phone TEXT,
-            has_access INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')))""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS topics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
-            emoji TEXT DEFAULT '📚', sort_order INTEGER DEFAULT 0)""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS subtopics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, topic_id INTEGER NOT NULL,
-            title TEXT NOT NULL, FOREIGN KEY (topic_id) REFERENCES topics(id))""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS questions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, topic_id INTEGER NOT NULL,
-            subtopic_id INTEGER, question TEXT NOT NULL, answer TEXT NOT NULL,
-            FOREIGN KEY (topic_id) REFERENCES topics(id),
-            FOREIGN KEY (subtopic_id) REFERENCES subtopics(id))""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL,
-            order_id TEXT UNIQUE NOT NULL, amount REAL NOT NULL,
-            status TEXT DEFAULT 'pending', liqpay_data TEXT,
-            created_at TEXT DEFAULT (datetime('now')), paid_at TEXT,
-            FOREIGN KEY (telegram_id) REFERENCES users(telegram_id))""")
-        cur.execute("""CREATE TABLE IF NOT EXISTS rate_limits (
-            telegram_id INTEGER NOT NULL, action TEXT NOT NULL,
-            count INTEGER DEFAULT 1, window_start TEXT DEFAULT (datetime('now')),
-            PRIMARY KEY (telegram_id, action))""")
-        conn.commit()
+        cur.executescript(schema)
+    conn.commit()
     conn.close()
-    log.info("✅ БД ініціалізована")
+    migrate()
+    seed_default_topics()
+    ensure_default_subtopics()
 
 
-def check_rate_limit(telegram_id: int, action: str, max_per_hour: int = 20) -> bool:
-    conn = get_connection()
-    p = ph()
+# ──────────────────────────────────────────────────────────────────────────
+# Домиграція існуючої бази (безпечно повторюваний виклик)
+# ──────────────────────────────────────────────────────────────────────────
+
+def _safe_add_column(cur, table, column_def):
+    """Додає колонку, якщо вона ще не існує. Ігнорує помилку 'вже є'."""
     try:
-        if USE_POSTGRES:
-            cur = conn.cursor()
-            cur.execute(f"DELETE FROM rate_limits WHERE telegram_id={p} AND action={p} AND window_start < NOW() - INTERVAL '1 hour'", (telegram_id, action))
-            cur.execute(f"INSERT INTO rate_limits (telegram_id, action, count) VALUES ({p},{p},1) ON CONFLICT (telegram_id, action) DO UPDATE SET count = rate_limits.count + 1 RETURNING count", (telegram_id, action))
-            count = cur.fetchone()["count"]
-            conn.commit()
-            cur.close()
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+    except Exception:
+        pass  # колонка вже існує — це нормально
+
+
+EMOJI_MAP = {
+    "Податки та звітність": "📊",
+    "Зарплата та ЄСВ": "👩‍💼",
+    "ФОП: реєстрація та статус": "🧾",
+    "Розрахунки, платежі, банк": "🏦",
+    "Первинка та господарські операції": "📦",
+    "Інше": "📁",
+}
+
+
+def migrate():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # 1. emoji для тем
+    _safe_add_column(cur, "topics", "emoji TEXT")
+    conn.commit()
+
+    cur.execute("SELECT id, name, emoji FROM topics")
+    for row in cur.fetchall():
+        row = dict(row)
+        if not row.get("emoji"):
+            emoji = EMOJI_MAP.get(row["name"], "📁")
+            placeholder = "%s" if USE_POSTGRES else "?"
+            cur.execute(
+                f"UPDATE topics SET emoji = {placeholder} WHERE id = {placeholder}",
+                (emoji, row["id"]),
+            )
+    conn.commit()
+
+    # 2. payments: item_type / item_id (для старих БД, де могли бути тільки question_id)
+    _safe_add_column(cur, "payments", "item_type TEXT DEFAULT 'question'")
+    _safe_add_column(cur, "payments", "item_id INTEGER")
+    conn.commit()
+    try:
+        cur.execute("SELECT id, question_id, item_id FROM payments")
+        for row in cur.fetchall():
+            row = dict(row)
+            if row.get("item_id") is None and row.get("question_id") is not None:
+                placeholder = "%s" if USE_POSTGRES else "?"
+                cur.execute(
+                    f"UPDATE payments SET item_id = {placeholder}, item_type = 'question' WHERE id = {placeholder}",
+                    (row["question_id"], row["id"]),
+                )
+        conn.commit()
+    except Exception:
+        pass  # старої колонки question_id могло й не бути — це ок
+
+    conn.close()
+
+
+def ensure_default_subtopics():
+    """
+    Для кожної теми гарантує наявність хоча б однієї підтеми ("Усі питання").
+    Питання без підтеми (subtopic_id IS NULL) прив'язуються до неї автоматично.
+    Це дозволяє bot.py одразу показувати меню тема → підтема → питання,
+    навіть якщо ви ще не ділили питання на детальніші підтеми вручну.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    placeholder = "%s" if USE_POSTGRES else "?"
+
+    cur.execute("SELECT id, name FROM topics WHERE is_active = 1")
+    topics = _rows_to_dicts(cur.fetchall())
+
+    for topic in topics:
+        cur.execute(
+            f"SELECT id FROM subtopics WHERE topic_id = {placeholder} AND slug = 'usi-pytannia'",
+            (topic["id"],),
+        )
+        existing = cur.fetchone()
+        if existing:
+            default_subtopic_id = dict(existing)["id"]
         else:
-            cur = conn.cursor()
-            cur.execute(f"DELETE FROM rate_limits WHERE telegram_id={p} AND action={p} AND datetime(window_start, '+1 hour') < datetime('now')", (telegram_id, action))
-            cur.execute(f"INSERT INTO rate_limits (telegram_id, action, count) VALUES ({p},{p},1) ON CONFLICT (telegram_id, action) DO UPDATE SET count = count + 1", (telegram_id, action))
+            cur.execute(
+                f"INSERT INTO subtopics (topic_id, name, slug, sort_order) "
+                f"VALUES ({placeholder}, {placeholder}, 'usi-pytannia', 0)",
+                (topic["id"], "Усі питання"),
+            )
             conn.commit()
-            row = conn.execute(f"SELECT count FROM rate_limits WHERE telegram_id={p} AND action={p}", (telegram_id, action)).fetchone()
-            count = row["count"] if row else 1
-        return count <= max_per_hour
-    except Exception as e:
-        log.error(f"Rate limit error: {e}")
-        return True
-    finally:
-        conn.close()
+            cur.execute(
+                f"SELECT id FROM subtopics WHERE topic_id = {placeholder} AND slug = 'usi-pytannia'",
+                (topic["id"],),
+            )
+            default_subtopic_id = dict(cur.fetchone())["id"]
+
+        # Прив'язуємо "сирітські" питання (subtopic_id IS NULL) цієї теми
+        cur.execute(
+            f"UPDATE questions SET subtopic_id = {placeholder} "
+            f"WHERE topic_id = {placeholder} AND subtopic_id IS NULL",
+            (default_subtopic_id, topic["id"]),
+        )
+        conn.commit()
+
+    conn.close()
 
 
-def upsert_user(telegram_id: int, username: str = None, full_name: str = None):
+DEFAULT_TOPICS = [
+    ("Податки та звітність", "podatky-zvitnist", 10),
+    ("Зарплата та ЄСВ", "zarplata-esv", 20),
+    ("ФОП: реєстрація та статус", "fop-reyestratsiya", 30),
+    ("Розрахунки, платежі, банк", "rozrahunky-bank", 40),
+    ("Первинка та господарські операції", "pervynka-hospoperatsii", 50),
+    ("Інше", "inshe", 999),
+]
+
+
+def seed_default_topics():
     conn = get_connection()
-    p = placeholder(3)
+    cur = conn.cursor()
+    for name, slug, sort_order in DEFAULT_TOPICS:
+        if USE_POSTGRES:
+            cur.execute(
+                """INSERT INTO topics (name, slug, sort_order, emoji)
+                   VALUES (%s, %s, %s, %s) ON CONFLICT (slug) DO NOTHING""",
+                (name, slug, sort_order, EMOJI_MAP.get(name, "📁")),
+            )
+        else:
+            cur.execute(
+                """INSERT OR IGNORE INTO topics (name, slug, sort_order, emoji)
+                   VALUES (?, ?, ?, ?)""",
+                (name, slug, sort_order, EMOJI_MAP.get(name, "📁")),
+            )
+    conn.commit()
+    conn.close()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Формування "answer" з 7 блоків для показу в боті (bot.py очікує q['answer'])
+# ──────────────────────────────────────────────────────────────────────────
+
+def _format_answer(q):
+    return (
+        f"👤 <b>Кому це актуально:</b>\n{q['block_audience']}\n\n"
+        f"⚠️ <b>Суть проблеми:</b>\n{q['block_problem']}\n\n"
+        f"✅ <b>Як діяти правильно:</b>\n{q['block_solution']}\n\n"
+        f"📋 <b>Приклад з практики:</b>\n{q['block_example']}\n\n"
+        f"❌ <b>Типові помилки:</b>\n{q['block_mistakes']}\n\n"
+        f"📌 <b>Короткий чеклист:</b>\n{q['block_checklist']}\n\n"
+        f"📎 <b>Джерело / нормативна база:</b>\n{q['block_sources']}"
+    )
+
+
+def _enrich_question(q):
+    """Додає q['question'] і q['answer'] — поля, які очікує bot.py,
+    не втрачаючи оригінальні block_* поля."""
+    q = dict(q)
+    q["question"] = q["title"]
+    q["answer"] = _format_answer(q)
+    return q
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Користувачі
+# ──────────────────────────────────────────────────────────────────────────
+
+def upsert_user(telegram_id, username, full_name):
+    conn = get_connection()
+    cur = conn.cursor()
     if USE_POSTGRES:
-        sql = f"INSERT INTO users (telegram_id, username, full_name) VALUES ({p}) ON CONFLICT (telegram_id) DO UPDATE SET username=EXCLUDED.username, full_name=EXCLUDED.full_name"
+        cur.execute(
+            """INSERT INTO users (telegram_id, username, full_name)
+               VALUES (%s, %s, %s)
+               ON CONFLICT (telegram_id) DO UPDATE
+               SET username = EXCLUDED.username, full_name = EXCLUDED.full_name""",
+            (telegram_id, username, full_name),
+        )
     else:
-        sql = f"INSERT INTO users (telegram_id, username, full_name) VALUES ({p}) ON CONFLICT(telegram_id) DO UPDATE SET username=excluded.username, full_name=excluded.full_name"
-    _exec(conn, sql, (telegram_id, username, full_name))
+        cur.execute(
+            """INSERT INTO users (telegram_id, username, full_name)
+               VALUES (?, ?, ?)
+               ON CONFLICT(telegram_id) DO UPDATE
+               SET username = excluded.username, full_name = excluded.full_name""",
+            (telegram_id, username, full_name),
+        )
+    conn.commit()
     conn.close()
 
 
-def get_user(telegram_id: int):
+def get_user(telegram_id):
     conn = get_connection()
-    row = _fetchone(conn, f"SELECT * FROM users WHERE telegram_id={ph()}", (telegram_id,))
+    cur = conn.cursor()
+    placeholder = "%s" if USE_POSTGRES else "?"
+    cur.execute(f"SELECT * FROM users WHERE telegram_id = {placeholder}", (telegram_id,))
+    row = cur.fetchone()
     conn.close()
-    return row
+    return _row_to_dict(row)
 
 
-def set_user_access(telegram_id: int, has_access: int = 1):
-    conn = get_connection()
-    _exec(conn, f"UPDATE users SET has_access={ph()} WHERE telegram_id={ph()}", (has_access, telegram_id))
-    conn.close()
-
-
-def get_stats():
-    conn = get_connection()
-    users   = _fetchone(conn, "SELECT COUNT(*) AS cnt FROM users")
-    sales   = _fetchone(conn, "SELECT COUNT(*) AS cnt FROM payments WHERE status='success'")
-    revenue = _fetchone(conn, "SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE status='success'")
-    pending = _fetchone(conn, "SELECT COUNT(*) AS cnt FROM payments WHERE status='pending'")
-    conn.close()
-    def v(r, k="cnt"):
-        if r is None: return 0
-        try: return r[k]
-        except: return r[0]
-    return {"users": v(users), "sales": v(sales), "revenue": float(v(revenue, "total") or 0), "pending": v(pending)}
-
+# ──────────────────────────────────────────────────────────────────────────
+# Теми, підтеми, питання (сумісні з bot.py)
+# ──────────────────────────────────────────────────────────────────────────
 
 def get_all_topics():
     conn = get_connection()
-    rows = _fetch(conn, "SELECT * FROM topics ORDER BY sort_order")
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, name AS title, emoji, slug FROM topics "
+        "WHERE is_active = 1 ORDER BY sort_order, name"
+    )
+    rows = _rows_to_dicts(cur.fetchall())
     conn.close()
     return rows
 
 
-def get_subtopics(topic_id: int):
+def get_subtopics(topic_id):
     conn = get_connection()
-    rows = _fetch(conn, f"SELECT * FROM subtopics WHERE topic_id={ph()}", (topic_id,))
+    cur = conn.cursor()
+    placeholder = "%s" if USE_POSTGRES else "?"
+    cur.execute(
+        f"SELECT id, name AS title, slug FROM subtopics "
+        f"WHERE topic_id = {placeholder} AND is_active = 1 ORDER BY sort_order, name",
+        (topic_id,),
+    )
+    rows = _rows_to_dicts(cur.fetchall())
     conn.close()
     return rows
 
 
-def get_questions_by_topic(topic_id: int):
+def get_questions_by_topic(topic_id):
     conn = get_connection()
-    sql = f"""SELECT q.*, s.title AS subtopic_title FROM questions q
-        LEFT JOIN subtopics s ON q.subtopic_id = s.id
-        WHERE q.topic_id={ph()} ORDER BY q.subtopic_id, q.id"""
-    rows = _fetch(conn, sql, (topic_id,))
+    cur = conn.cursor()
+    placeholder = "%s" if USE_POSTGRES else "?"
+    cur.execute(
+        f"SELECT * FROM questions WHERE topic_id = {placeholder} AND is_active = 1 ORDER BY title",
+        (topic_id,),
+    )
+    rows = _rows_to_dicts(cur.fetchall())
+    conn.close()
+    return [_enrich_question(r) for r in rows]
+
+
+def get_question_by_id(question_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    placeholder = "%s" if USE_POSTGRES else "?"
+    cur.execute(f"SELECT * FROM questions WHERE id = {placeholder}", (question_id,))
+    row = cur.fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return _enrich_question(dict(row))
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Платежі та покупки
+# ──────────────────────────────────────────────────────────────────────────
+
+def create_payment(telegram_id, order_id, amount, item_type, item_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    placeholder = "%s" if USE_POSTGRES else "?"
+    cur.execute(
+        f"""INSERT INTO payments (order_id, user_id, item_type, item_id, amount, status)
+            VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, 'pending')""",
+        (order_id, telegram_id, item_type, item_id, amount),
+    )
+    conn.commit()
+    conn.close()
+
+
+def confirm_payment(order_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    placeholder = "%s" if USE_POSTGRES else "?"
+    cur.execute(
+        f"""UPDATE payments SET status = 'success', paid_at = {placeholder}
+            WHERE order_id = {placeholder}""",
+        (datetime.now().isoformat(), order_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_payment_by_order(order_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    placeholder = "%s" if USE_POSTGRES else "?"
+    cur.execute(f"SELECT * FROM payments WHERE order_id = {placeholder}", (order_id,))
+    row = cur.fetchone()
+    conn.close()
+    return _row_to_dict(row)
+
+
+def has_purchased(telegram_id, item_type, item_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    placeholder = "%s" if USE_POSTGRES else "?"
+    cur.execute(
+        f"""SELECT 1 FROM payments
+            WHERE user_id = {placeholder} AND item_type = {placeholder}
+            AND item_id = {placeholder} AND status = 'success' LIMIT 1""",
+        (telegram_id, item_type, item_id),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row is not None
+
+
+def get_user_purchases(telegram_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    placeholder = "%s" if USE_POSTGRES else "?"
+    cur.execute(
+        f"""SELECT * FROM payments WHERE user_id = {placeholder} AND status = 'success'
+            ORDER BY paid_at DESC""",
+        (telegram_id,),
+    )
+    rows = _rows_to_dicts(cur.fetchall())
     conn.close()
     return rows
 
 
-def create_payment(telegram_id: int, order_id: str, amount: float):
+# ──────────────────────────────────────────────────────────────────────────
+# Rate limiting (захист від спаму кнопкою "оплатити")
+# ──────────────────────────────────────────────────────────────────────────
+
+def check_rate_limit(telegram_id, action, limit, window_minutes=10):
+    """Повертає True, якщо дію можна виконати (ліміт не перевищено),
+    і одразу логує спробу. limit — максимум дій за window_minutes хвилин."""
     conn = get_connection()
-    _exec(conn, f"INSERT INTO payments (telegram_id, order_id, amount) VALUES ({placeholder(3)})", (telegram_id, order_id, amount))
+    cur = conn.cursor()
+    placeholder = "%s" if USE_POSTGRES else "?"
+
+    since = (datetime.now() - timedelta(minutes=window_minutes)).isoformat()
+    cur.execute(
+        f"""SELECT COUNT(*) AS cnt FROM rate_limits
+            WHERE telegram_id = {placeholder} AND action = {placeholder}
+            AND created_at >= {placeholder}""",
+        (telegram_id, action, since),
+    )
+    count = dict(cur.fetchone())["cnt"]
+
+    if count >= limit:
+        conn.close()
+        return False
+
+    cur.execute(
+        f"INSERT INTO rate_limits (telegram_id, action) VALUES ({placeholder}, {placeholder})",
+        (telegram_id, action),
+    )
+    conn.commit()
     conn.close()
+    return True
 
 
-def confirm_payment(order_id: str, liqpay_data: str):
+# ──────────────────────────────────────────────────────────────────────────
+# Статистика для /stats
+# ──────────────────────────────────────────────────────────────────────────
+
+def get_stats():
     conn = get_connection()
-    p = ph()
-    if USE_POSTGRES:
-        _exec(conn, f"UPDATE payments SET status='success', liqpay_data={p}, paid_at=NOW() WHERE order_id={p}", (liqpay_data, order_id))
-    else:
-        _exec(conn, f"UPDATE payments SET status='success', liqpay_data={p}, paid_at=datetime('now') WHERE order_id={p}", (liqpay_data, order_id))
-    row = _fetchone(conn, f"SELECT telegram_id FROM payments WHERE order_id={p}", (order_id,))
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS cnt FROM users")
+    users = dict(cur.fetchone())["cnt"]
+
+    cur.execute("SELECT COUNT(*) AS cnt FROM payments WHERE status = 'success'")
+    sales = dict(cur.fetchone())["cnt"]
+
+    cur.execute("SELECT COALESCE(SUM(amount), 0) AS total FROM payments WHERE status = 'success'")
+    revenue = dict(cur.fetchone())["total"] or 0
+
+    cur.execute("SELECT COUNT(*) AS cnt FROM payments WHERE status = 'pending'")
+    pending = dict(cur.fetchone())["cnt"]
+
     conn.close()
-    if row:
-        tid = row["telegram_id"]
-        set_user_access(tid, 1)
-        return tid
-    return None
+    return {"users": users, "sales": sales, "revenue": float(revenue), "pending": pending}
 
 
-def get_payment_by_order(order_id: str):
-    conn = get_connection()
-    row = _fetchone(conn, f"SELECT * FROM payments WHERE order_id={ph()}", (order_id,))
-    conn.close()
-    return row
+if __name__ == "__main__":
+    init_db()
+    print("База даних ініціалізована й домигрована.")
+    print("Додано: emoji для тем, підтема 'Усі питання' для кожної теми,")
+    print("прив'язка існуючих питань, таблиця rate_limits.")
+    print("Тепер bot.py повинен коректно працювати з наявними 27 питаннями.")
