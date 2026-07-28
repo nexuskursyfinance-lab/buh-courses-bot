@@ -79,9 +79,12 @@ MARGIN = 20 * mm
 NAVY = HexColor("#1F3864")
 GREY = HexColor("#5A5A5A")
 INK = HexColor("#1A1A1A")
-# Водяний знак: світлий і рідкий, щоб не заважати читанню, але лишався видимим
-WATERMARK_COLOR = Color(0.55, 0.55, 0.55, alpha=0.12)
-WATERMARK_STEP = 100  # mm між рядками водяного знаку по діагоналі — що більше, то рідше
+# Водяний знак: ОДИН великий, дуже світлий напис по центру сторінки —
+# як у серйозних платних PDF-продуктів (не "рябить" плитками по всій
+# сторінці). Ідентифікатор покупця лишається присутнім і читабельним
+# при потребі перевірки, але не заважає читати чи друкувати основний текст.
+WATERMARK_COLOR = Color(0.5, 0.5, 0.5, alpha=0.055)
+WATERMARK_FONT_SIZE = 30
 
 LEGAL_NOTICE = (
     "Матеріал є об'єктом авторського права (ст. 8, 15 Закону України "
@@ -193,16 +196,15 @@ def _safe_filename(text: str, max_len: int = 40) -> str:
 # =====================================================================
 
 def _draw_watermark(c: canvas.Canvas, text: str):
-    """Малює світлий, рідкий діагональний водяний знак — не заважає читанню,
-    але лишається видимим при спробі зробити скріншот чи роздрукувати."""
+    """Малює ОДИН великий, дуже світлий діагональний водяний знак по центру
+    сторінки — ідентифікатор покупця лишається присутнім, але не заважає
+    читанню чи друку (на відміну від "рябих" плиткових watermark)."""
     c.saveState()
-    c.setFont(FONT_BOLD, 11)
+    c.setFont(FONT_BOLD, WATERMARK_FONT_SIZE)
     c.setFillColor(WATERMARK_COLOR)
     c.translate(PAGE_W / 2, PAGE_H / 2)
     c.rotate(40)
-    step = WATERMARK_STEP
-    for y in range(-int(PAGE_H), int(PAGE_H), int(step)):
-        c.drawCentredString(0, y, text)
+    c.drawCentredString(0, 0, text)
     c.restoreState()
 
 
