@@ -12,6 +12,13 @@
 жодного цифрового файлу), але робить джерело перепродажу
 відстежуваним — якщо файл десь "спливе", видно, чий саме він.
 
+Текст питання в базі містить HTML-розмітку (<b>...</b>, <a href="...">...</a>)
+для показу в Telegram — цей модуль коректно перетворює її на справжнє
+форматування в PDF (жирний текст, посилання як "текст (URL)"), а не
+показує теги буквально. Емодзі, які не вміє малювати кириличний
+шрифт (DejaVu Sans не містить кольорових emoji-гліфів), акуратно
+прибираються, щоб замість них не з'являлись порожні "квадратики".
+
 Використання з bot.py:
     from pdf_generator import generate_question_pdf
     pdf_buffer = generate_question_pdf(question_dict, telegram_id)
@@ -72,7 +79,9 @@ MARGIN = 20 * mm
 NAVY = HexColor("#1F3864")
 GREY = HexColor("#5A5A5A")
 INK = HexColor("#1A1A1A")
-WATERMARK_COLOR = Color(0.55, 0.55, 0.55, alpha=0.20)
+# Водяний знак: світлий і рідкий, щоб не заважати читанню, але лишався видимим
+WATERMARK_COLOR = Color(0.55, 0.55, 0.55, alpha=0.12)
+WATERMARK_STEP = 100  # mm між рядками водяного знаку по діагоналі — що більше, то рідше
 
 LEGAL_NOTICE = (
     "Матеріал є об'єктом авторського права (ст. 8, 15 Закону України "
@@ -82,6 +91,95 @@ LEGAL_NOTICE = (
     "Договору публічної оферти."
 )
 
+# =====================================================================
+# ОЧИЩЕННЯ ТЕКСТУ: HTML-розмітка → справжнє форматування, емодзі — геть
+# =====================================================================
+
+_A_TAG = re.compile(r'<a\s+href="([^"]*)">(.*?)</a>', re.IGNORECASE | re.DOTALL)
+# Прибираємо всі теги, ОКРІМ <b> і </b> — їх обробляємо окремо як жирний текст
+_UNKNOWN_TAG = re.compile(r'<(?!/?b\b)[^>]+>', re.IGNORECASE)
+_BOLD_SPLIT = re.compile(r'(<b>|</b>)', re.IGNORECASE)
+
+# Основні блоки Unicode, де живуть emoji — DejaVu Sans їх не містить,
+# тому такі символи прибираються, щоб не показувались "квадратиками".
+_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"  # символи, піктограми (у т.ч. 👤📋❌📌📎🔥💰🏦💡)
+    "\U00002600-\U000027BF"  # інші символи й дінгбати (у т.ч. ⚠️✅)
+    "\U0001F1E6-\U0001F1FF"  # прапори
+    "\U00002B00-\U00002BFF"  # додаткові символи і стрілки
+    "\uFE0F"                  # варіаційний селектор (робить символ кольоровим emoji)
+    "\u200D"                  # zero-width joiner (склеює складові emoji)
+    "]+"
+)
+
+
+def _clean_text(text: str) -> str:
+    """Перетворює <a href="URL">текст</a> на 'текст (URL)', прибирає емодзі
+    та будь-які HTML-теги, окрім <b>/</b> (їх обробляє _parse_bold_segments)."""
+    text = text or ""
+    text = _A_TAG.sub(lambda m: f"{m.group(2)} ({m.group(1)})", text)
+    text = _UNKNOWN_TAG.sub("", text)
+    text = _EMOJI_PATTERN.sub("", text)
+    return text
+
+
+def _parse_bold_segments(line: str):
+    """Розбиває рядок на сегменти [(текст, жирний?), ...] за тегами <b>/</b>."""
+    segments = []
+    bold = False
+    for part in _BOLD_SPLIT.split(line):
+        if part == "<b>":
+            bold = True
+        elif part == "</b>":
+            bold = False
+        elif part:
+            segments.append((part, bold))
+    return segments or [("", False)]
+
+
+def _tokenize_segments(segments):
+    """[(текст, жирний?), ...] → [(слово_або_пробіл, жирний?), ...]"""
+    tokens = []
+    for text, bold in segments:
+        for part in re.split(r"(\s+)", text):
+            if part:
+                tokens.append((part, bold))
+    return tokens
+
+
+def _wrap_tokens(tokens, max_width, font_size):
+    """Розбиває токени на рядки за шириною сторінки, з урахуванням жирного шрифту."""
+    lines, current, current_width = [], [], 0.0
+    for word, bold in tokens:
+        font = FONT_BOLD if bold else FONT_REGULAR
+        w = pdfmetrics.stringWidth(word, font, font_size)
+        if word.isspace():
+            if current_width + w > max_width and current:
+                lines.append(current)
+                current, current_width = [], 0.0
+                continue
+            current.append((word, bold))
+            current_width += w
+            continue
+        if current_width + w > max_width and current:
+            lines.append(current)
+            current, current_width = [], 0.0
+        current.append((word, bold))
+        current_width += w
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _draw_line(c: canvas.Canvas, line_tokens, x: float, y: float, font_size: float):
+    cx = x
+    for word, bold in line_tokens:
+        font = FONT_BOLD if bold else FONT_REGULAR
+        c.setFont(font, font_size)
+        c.drawString(cx, y, word)
+        cx += pdfmetrics.stringWidth(word, font, font_size)
+
 
 def _safe_filename(text: str, max_len: int = 40) -> str:
     """Прибирає символи, небезпечні для імені файлу, і обрізає довжину."""
@@ -90,15 +188,20 @@ def _safe_filename(text: str, max_len: int = 40) -> str:
     return text[:max_len] if text else "gp"
 
 
+# =====================================================================
+# МАЛЮВАННЯ СТОРІНКИ
+# =====================================================================
+
 def _draw_watermark(c: canvas.Canvas, text: str):
-    """Малює напівпрозорий діагональний водяний знак по всій сторінці."""
+    """Малює світлий, рідкий діагональний водяний знак — не заважає читанню,
+    але лишається видимим при спробі зробити скріншот чи роздрукувати."""
     c.saveState()
-    c.setFont(FONT_BOLD, 12)
+    c.setFont(FONT_BOLD, 11)
     c.setFillColor(WATERMARK_COLOR)
     c.translate(PAGE_W / 2, PAGE_H / 2)
     c.rotate(40)
-    step = 65
-    for y in range(-int(PAGE_H), int(PAGE_H), step):
+    step = WATERMARK_STEP
+    for y in range(-int(PAGE_H), int(PAGE_H), int(step)):
         c.drawCentredString(0, y, text)
     c.restoreState()
 
@@ -113,15 +216,17 @@ def _draw_footer(c: canvas.Canvas, footer_text: str, page_num: int):
 
 
 def _draw_header(c: canvas.Canvas, title: str):
-    """Фірмовий верхній банер зі значком і заголовком питання."""
+    """Фірмовий верхній банер із заголовком питання (без emoji — не всі
+    символи є в кириличному шрифті, замість них лишається чистий текст)."""
     c.saveState()
     c.setFillColor(NAVY)
     c.rect(0, PAGE_H - 28 * mm, PAGE_W, 28 * mm, fill=1, stroke=0)
     c.setFillColor(HexColor("#FFFFFF"))
     c.setFont(FONT_BOLD, 10)
-    c.drawString(MARGIN, PAGE_H - 11 * mm, "🔥 ГАРЯЧЕ ПИТАННЯ · Бухгалтерські лайфхаки")
+    c.drawString(MARGIN, PAGE_H - 11 * mm, "ГАРЯЧЕ ПИТАННЯ · Бухгалтерські лайфхаки")
     c.setFont(FONT_BOLD, 13)
-    lines = simpleSplit(title or "", FONT_BOLD, 13, PAGE_W - 2 * MARGIN)
+    clean_title = _clean_text(title)
+    lines = simpleSplit(clean_title, FONT_BOLD, 13, PAGE_W - 2 * MARGIN)
     y = PAGE_H - 19 * mm
     for line in lines[:2]:
         c.drawString(MARGIN, y, line)
@@ -136,31 +241,34 @@ def _wrap_and_draw_body(
     footer_text: str,
     start_y: float,
 ) -> int:
-    """Пише основний текст, автоматично переносячи на нові сторінки
-    (з повторним водяним знаком і футером на кожній новій сторінці)."""
+    """Пише основний текст (із правильним жирним форматуванням замість
+    буквальних <b> тегів), автоматично переносячи на нові сторінки."""
     max_width = PAGE_W - 2 * MARGIN
     font_size = 10.5
-    leading = 14
+    leading = 15
     y = start_y
     page_num = 1
 
-    c.setFont(FONT_REGULAR, font_size)
     c.setFillColor(INK)
 
     for para in (text or "").split("\n"):
         if not para.strip():
             y -= leading
             continue
-        for line in simpleSplit(para, FONT_REGULAR, font_size, max_width):
+
+        segments = _parse_bold_segments(para)
+        tokens = _tokenize_segments(segments)
+        wrapped_lines = _wrap_tokens(tokens, max_width, font_size)
+
+        for line_tokens in wrapped_lines:
             if y < MARGIN + 15 * mm:
                 _draw_footer(c, footer_text, page_num)
                 c.showPage()
                 page_num += 1
                 _draw_watermark(c, watermark_text)
-                c.setFont(FONT_REGULAR, font_size)
                 c.setFillColor(INK)
                 y = PAGE_H - MARGIN
-            c.drawString(MARGIN, y, line)
+            _draw_line(c, line_tokens, MARGIN, y, font_size)
             y -= leading
         y -= leading * 0.4
 
@@ -168,12 +276,17 @@ def _wrap_and_draw_body(
     return page_num
 
 
+# =====================================================================
+# ГОЛОВНА ФУНКЦІЯ
+# =====================================================================
+
 def generate_question_pdf(question: dict, telegram_id: int, extra_ref: str = "") -> BytesIO:
     """
     Генерує ПЕРСОНАЛІЗОВАНИЙ PDF для конкретного покупця.
 
     question    — словник з ключами 'question' (заголовок) і 'answer' (текст
-                  відповіді) — ті самі поля, які bot.py вже використовує.
+                  відповіді, може містити HTML-розмітку <b>/<a> — обробляється
+                  автоматично) — ті самі поля, які bot.py вже використовує.
     telegram_id — Telegram ID покупця; вшивається у watermark і footer.
     extra_ref   — необов'язковий додатковий код (наприклад order_id), якщо
                   він відомий на момент виклику; якщо ні — генерується
@@ -181,10 +294,6 @@ def generate_question_pdf(question: dict, telegram_id: int, extra_ref: str = "")
 
     Повертає BytesIO з готовим PDF (курсор уже на позиції 0) —
     прямо для message.answer_document(...) в aiogram.
-
-    ВАЖЛИВО: кожен виклик створює НОВИЙ файл із новим watermark, навіть
-    якщо викликати для того самого question_id і того самого telegram_id
-    двічі — це нормально й додатково ускладнює зіставлення "злитих" копій.
     """
     order_ref = extra_ref or f"TG{telegram_id}-{uuid.uuid4().hex[:8]}"
     date_str = datetime.now().strftime("%d.%m.%Y %H:%M")
@@ -200,14 +309,14 @@ def generate_question_pdf(question: dict, telegram_id: int, extra_ref: str = "")
 
     # --- Метадані файлу (шар захисту №4) ---
     c.setAuthor("ФОП Кирушок Наталія Юріївна")
-    c.setTitle(question.get("question", "Гаряче питання"))
+    c.setTitle(_clean_text(question.get("question", "Гаряче питання")))
     c.setSubject("Бухгалтерські лайфхаки — Гаряче питання")
     c.setCreator("Бухгалтерські лайфхаки")
 
     _draw_watermark(c, watermark_text)
     _draw_header(c, question.get("question", ""))
 
-    body_text = question.get("answer", "")
+    body_text = _clean_text(question.get("answer", ""))
     body_text += "\n\n" + "—" * 40 + "\n" + LEGAL_NOTICE
 
     _wrap_and_draw_body(
@@ -222,5 +331,5 @@ def generate_question_pdf(question: dict, telegram_id: int, extra_ref: str = "")
 def build_pdf_filename(question: dict) -> str:
     """Формує ім'я файлу у форматі ГП_{id}_{коротка_назва}.pdf"""
     qid = question.get("id", "0")
-    short = _safe_filename(question.get("question", ""))
+    short = _safe_filename(_clean_text(question.get("question", "")))
     return f"ГП_{qid}_{short}.pdf"
