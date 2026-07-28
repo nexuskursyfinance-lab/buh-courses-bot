@@ -1,143 +1,226 @@
 """
-Генератор PDF з питаннями та відповідями
-Використовує reportlab для створення гарно оформленого документу
+Генератор персоналізованих PDF-файлів для «Гарячих питань».
+
+Навіщо цей файл існує:
+Кожне гаряче питання в базі даних — один спільний текст, однаковий
+для всіх покупців. Але клієнту видається не цей "сирий" текст,
+а PDF, згенерований у момент видачі САМЕ для нього — з водяним
+знаком, прихованим ідентифікатором і метаданими, які вказують
+на конкретного покупця (Telegram ID + унікальний код доступу).
+
+Це не робить копіювання неможливим (це в принципі неможливо для
+жодного цифрового файлу), але робить джерело перепродажу
+відстежуваним — якщо файл десь "спливе", видно, чий саме він.
+
+Використання з bot.py:
+    from pdf_generator import generate_question_pdf
+    pdf_buffer = generate_question_pdf(question_dict, telegram_id)
+    # pdf_buffer — це BytesIO, готовий для message.answer_document(...)
 """
+
 import os
+import re
+import uuid
+import logging
+from datetime import datetime
 from io import BytesIO
 
-try:
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import cm
-    from reportlab.lib import colors
-    from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, HRFlowable, PageBreak
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.lib.colors import HexColor, Color
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.utils import simpleSplit
+
+log = logging.getLogger(__name__)
+
+# =====================================================================
+# ШРИФТИ З ПІДТРИМКОЮ КИРИЛИЦІ
+# =====================================================================
+# Стандартні вбудовані шрифти reportlab (Helvetica тощо) НЕ вміють
+# показувати кирилицю. Тому в комплекті йде підпапка fonts/ з двома
+# безкоштовними TTF-файлами (DejaVu Sans, вільна ліцензія).
+# НЕ видаляйте й не перейменовуйте папку fonts/ поруч із цим файлом.
+
+FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+_FONT_REGULAR_PATH = os.path.join(FONTS_DIR, "DejaVuSans.ttf")
+_FONT_BOLD_PATH = os.path.join(FONTS_DIR, "DejaVuSans-Bold.ttf")
+
+FONT_REGULAR = "Helvetica"
+FONT_BOLD = "Helvetica-Bold"
+
+if os.path.exists(_FONT_REGULAR_PATH) and os.path.exists(_FONT_BOLD_PATH):
+    pdfmetrics.registerFont(TTFont("DejaVuSans", _FONT_REGULAR_PATH))
+    pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", _FONT_BOLD_PATH))
+    FONT_REGULAR = "DejaVuSans"
+    FONT_BOLD = "DejaVuSans-Bold"
+else:
+    log.warning(
+        "Кириличні шрифти не знайдено у %s — тексти кирилицею в PDF "
+        "можуть не відобразитись коректно. Перевірте, що папка fonts/ "
+        "з DejaVuSans.ttf і DejaVuSans-Bold.ttf лежить поруч із pdf_generator.py",
+        FONTS_DIR,
     )
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-    REPORTLAB_AVAILABLE = True
-except ImportError:
-    REPORTLAB_AVAILABLE = False
+
+# =====================================================================
+# ВІЗУАЛЬНІ КОНСТАНТИ
+# =====================================================================
+
+PAGE_W, PAGE_H = A4
+MARGIN = 20 * mm
+NAVY = HexColor("#1F3864")
+GREY = HexColor("#5A5A5A")
+INK = HexColor("#1A1A1A")
+WATERMARK_COLOR = Color(0.55, 0.55, 0.55, alpha=0.20)
+
+LEGAL_NOTICE = (
+    "Матеріал є об'єктом авторського права (ст. 8, 15 Закону України "
+    "«Про авторське право і суміжні права»). Розповсюдження, перепродаж "
+    "і публікація без письмової згоди правовласника заборонені та тягнуть "
+    "відповідальність згідно з чинним законодавством України та умовами "
+    "Договору публічної оферти."
+)
 
 
-def generate_pdf(topic_title: str, questions: list) -> BytesIO:
+def _safe_filename(text: str, max_len: int = 40) -> str:
+    """Прибирає символи, небезпечні для імені файлу, і обрізає довжину."""
+    text = re.sub(r'[\\/*?:"<>|]', "", text or "")
+    text = text.strip().replace(" ", "_")
+    return text[:max_len] if text else "gp"
+
+
+def _draw_watermark(c: canvas.Canvas, text: str):
+    """Малює напівпрозорий діагональний водяний знак по всій сторінці."""
+    c.saveState()
+    c.setFont(FONT_BOLD, 12)
+    c.setFillColor(WATERMARK_COLOR)
+    c.translate(PAGE_W / 2, PAGE_H / 2)
+    c.rotate(40)
+    step = 65
+    for y in range(-int(PAGE_H), int(PAGE_H), step):
+        c.drawCentredString(0, y, text)
+    c.restoreState()
+
+
+def _draw_footer(c: canvas.Canvas, footer_text: str, page_num: int):
+    """Дрібний прихований ідентифікатор і copyright у футері кожної сторінки."""
+    c.saveState()
+    c.setFont(FONT_REGULAR, 6.5)
+    c.setFillColor(GREY)
+    c.drawString(MARGIN, 10 * mm, f"{footer_text} · стор. {page_num}")
+    c.restoreState()
+
+
+def _draw_header(c: canvas.Canvas, title: str):
+    """Фірмовий верхній банер зі значком і заголовком питання."""
+    c.saveState()
+    c.setFillColor(NAVY)
+    c.rect(0, PAGE_H - 28 * mm, PAGE_W, 28 * mm, fill=1, stroke=0)
+    c.setFillColor(HexColor("#FFFFFF"))
+    c.setFont(FONT_BOLD, 10)
+    c.drawString(MARGIN, PAGE_H - 11 * mm, "🔥 ГАРЯЧЕ ПИТАННЯ · Бухгалтерські лайфхаки")
+    c.setFont(FONT_BOLD, 13)
+    lines = simpleSplit(title or "", FONT_BOLD, 13, PAGE_W - 2 * MARGIN)
+    y = PAGE_H - 19 * mm
+    for line in lines[:2]:
+        c.drawString(MARGIN, y, line)
+        y -= 6 * mm
+    c.restoreState()
+
+
+def _wrap_and_draw_body(
+    c: canvas.Canvas,
+    text: str,
+    watermark_text: str,
+    footer_text: str,
+    start_y: float,
+) -> int:
+    """Пише основний текст, автоматично переносячи на нові сторінки
+    (з повторним водяним знаком і футером на кожній новій сторінці)."""
+    max_width = PAGE_W - 2 * MARGIN
+    font_size = 10.5
+    leading = 14
+    y = start_y
+    page_num = 1
+
+    c.setFont(FONT_REGULAR, font_size)
+    c.setFillColor(INK)
+
+    for para in (text or "").split("\n"):
+        if not para.strip():
+            y -= leading
+            continue
+        for line in simpleSplit(para, FONT_REGULAR, font_size, max_width):
+            if y < MARGIN + 15 * mm:
+                _draw_footer(c, footer_text, page_num)
+                c.showPage()
+                page_num += 1
+                _draw_watermark(c, watermark_text)
+                c.setFont(FONT_REGULAR, font_size)
+                c.setFillColor(INK)
+                y = PAGE_H - MARGIN
+            c.drawString(MARGIN, y, line)
+            y -= leading
+        y -= leading * 0.4
+
+    _draw_footer(c, footer_text, page_num)
+    return page_num
+
+
+def generate_question_pdf(question: dict, telegram_id: int, extra_ref: str = "") -> BytesIO:
     """
-    Генерує PDF з питаннями та відповідями.
-    
-    questions — список sqlite3.Row з полями: question, answer, subtopic_title
-    Повертає BytesIO об'єкт готового PDF
+    Генерує ПЕРСОНАЛІЗОВАНИЙ PDF для конкретного покупця.
+
+    question    — словник з ключами 'question' (заголовок) і 'answer' (текст
+                  відповіді) — ті самі поля, які bot.py вже використовує.
+    telegram_id — Telegram ID покупця; вшивається у watermark і footer.
+    extra_ref   — необов'язковий додатковий код (наприклад order_id), якщо
+                  він відомий на момент виклику; якщо ні — генерується
+                  власний унікальний код доступу.
+
+    Повертає BytesIO з готовим PDF (курсор уже на позиції 0) —
+    прямо для message.answer_document(...) в aiogram.
+
+    ВАЖЛИВО: кожен виклик створює НОВИЙ файл із новим watermark, навіть
+    якщо викликати для того самого question_id і того самого telegram_id
+    двічі — це нормально й додатково ускладнює зіставлення "злитих" копій.
     """
-    buffer = BytesIO()
+    order_ref = extra_ref or f"TG{telegram_id}-{uuid.uuid4().hex[:8]}"
+    date_str = datetime.now().strftime("%d.%m.%Y %H:%M")
 
-    if not REPORTLAB_AVAILABLE:
-        # Якщо reportlab не встановлено — повертаємо текстовий файл
-        text = f"=== {topic_title} ===\n\n"
-        for i, q in enumerate(questions, 1):
-            sub = q["subtopic_title"] or "Загальне"
-            text += f"[{sub}]\n"
-            text += f"❓ {q['question']}\n"
-            text += f"✅ {q['answer']}\n"
-            text += "-" * 60 + "\n\n"
-        buffer.write(text.encode("utf-8"))
-        buffer.seek(0)
-        return buffer
-
-    # --- Стилі ---
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        rightMargin=2*cm,
-        leftMargin=2*cm,
-        topMargin=2*cm,
-        bottomMargin=2*cm,
+    watermark_text = f"TG ID {telegram_id} · {order_ref} · {date_str}"
+    footer_text = (
+        f"Документ згенеровано для: TG ID {telegram_id}, {order_ref}, {date_str} · "
+        f"© Бухгалтерські лайфхаки · ФОП Кирушок Н.Ю."
     )
 
-    styles = getSampleStyleSheet()
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
 
-    style_title = ParagraphStyle(
-        "CustomTitle",
-        parent=styles["Title"],
-        fontSize=20,
-        textColor=colors.HexColor("#1e3a5f"),
-        spaceAfter=6,
+    # --- Метадані файлу (шар захисту №4) ---
+    c.setAuthor("ФОП Кирушок Наталія Юріївна")
+    c.setTitle(question.get("question", "Гаряче питання"))
+    c.setSubject("Бухгалтерські лайфхаки — Гаряче питання")
+    c.setCreator("Бухгалтерські лайфхаки")
+
+    _draw_watermark(c, watermark_text)
+    _draw_header(c, question.get("question", ""))
+
+    body_text = question.get("answer", "")
+    body_text += "\n\n" + "—" * 40 + "\n" + LEGAL_NOTICE
+
+    _wrap_and_draw_body(
+        c, body_text, watermark_text, footer_text, start_y=PAGE_H - 34 * mm
     )
 
-    style_subtitle = ParagraphStyle(
-        "SubTopic",
-        parent=styles["Heading2"],
-        fontSize=13,
-        textColor=colors.HexColor("#2563eb"),
-        spaceBefore=14,
-        spaceAfter=4,
-    )
+    c.save()
+    buf.seek(0)
+    return buf
 
-    style_question = ParagraphStyle(
-        "Question",
-        parent=styles["Normal"],
-        fontSize=11,
-        textColor=colors.HexColor("#111827"),
-        fontName="Helvetica-Bold",
-        spaceBefore=10,
-        spaceAfter=4,
-        leading=16,
-    )
 
-    style_answer = ParagraphStyle(
-        "Answer",
-        parent=styles["Normal"],
-        fontSize=10,
-        textColor=colors.HexColor("#374151"),
-        leading=15,
-        leftIndent=10,
-        spaceAfter=8,
-    )
-
-    style_footer = ParagraphStyle(
-        "Footer",
-        parent=styles["Normal"],
-        fontSize=8,
-        textColor=colors.grey,
-        alignment=1,  # центр
-    )
-
-    # --- Збираємо контент ---
-    story = []
-
-    # Заголовок
-    story.append(Paragraph(f"📚 {topic_title}", style_title))
-    story.append(Paragraph(
-        "Матеріали підготовлено командою Бухгалтерські курси | @buh_courses_bot",
-        style_footer
-    ))
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e5e7eb")))
-    story.append(Spacer(1, 0.4*cm))
-
-    # Групуємо питання за підтемами
-    current_sub = None
-    for i, q in enumerate(questions, 1):
-        sub = q["subtopic_title"] or "Загальні питання"
-
-        if sub != current_sub:
-            current_sub = sub
-            story.append(Spacer(1, 0.2*cm))
-            story.append(Paragraph(f"▸ {sub}", style_subtitle))
-            story.append(HRFlowable(
-                width="100%", thickness=0.5,
-                color=colors.HexColor("#bfdbfe"), spaceAfter=4
-            ))
-
-        story.append(Paragraph(f"❓  {q['question']}", style_question))
-        story.append(Paragraph(q["answer"], style_answer))
-
-    # Футер
-    story.append(Spacer(1, 1*cm))
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e5e7eb")))
-    story.append(Spacer(1, 0.2*cm))
-    story.append(Paragraph(
-        "© 2024 Бухгалтерські курси | Матеріал призначений лише для особистого використання",
-        style_footer
-    ))
-
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
+def build_pdf_filename(question: dict) -> str:
+    """Формує ім'я файлу у форматі ГП_{id}_{коротка_назва}.pdf"""
+    qid = question.get("id", "0")
+    short = _safe_filename(question.get("question", ""))
+    return f"ГП_{qid}_{short}.pdf"

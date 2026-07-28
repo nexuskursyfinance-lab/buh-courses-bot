@@ -1,12 +1,14 @@
 """
 Головний файл Telegram-бота «Бухгалтерські лайфхаки»
 Фреймворк: aiogram 3.x
-Модель продажу: кожне гаряче питання продається окремо за 99 грн.
+Модель продажу: кожне гаряче питання продається окремо за власною ціною.
+Видача матеріалу: персоналізований PDF з водяним знаком (pdf_generator.py).
 Запуск: python bot.py
 """
 import asyncio
 import logging
 import os
+import re
 import uuid
 from io import BytesIO
 
@@ -16,7 +18,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message, CallbackQuery,
-    InlineKeyboardMarkup,
+    InlineKeyboardMarkup, BufferedInputFile,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -33,6 +35,7 @@ from database import (
     has_purchased, get_user_purchases,
 )
 from liqpay_helper import generate_payment_url
+from pdf_generator import generate_question_pdf, build_pdf_filename
 
 # --- Налаштування ---
 logging.basicConfig(
@@ -131,6 +134,51 @@ def kb_buy_question(pay_url: str, question_id: int, price) -> InlineKeyboardMark
 
 
 # =====================================================================
+# ВИДАЧА МАТЕРІАЛУ: персоналізований PDF (захист від перепродажу)
+# =====================================================================
+
+async def send_question_pdf(
+    message: Message,
+    q: dict,
+    telegram_id: int,
+    topic_id: int,
+    subtopic_id: int,
+):
+    """
+    Генерує персоналізований PDF (водяний знак з Telegram ID покупця,
+    прихований ідентифікатор у футері, метадані файлу) і надсилає його
+    як документ у чат.
+
+    Підстраховка: якщо генерація PDF з якоїсь причини не вдалась —
+    клієнт УСЕ ОДНО отримує оплачений матеріал, просто текстом.
+    Клієнт ніколи не повинен лишитися без оплаченої відповіді
+    через технічну помилку генератора PDF.
+    """
+    try:
+        pdf_buffer = generate_question_pdf(q, telegram_id)
+        filename = build_pdf_filename(q)
+        document = BufferedInputFile(pdf_buffer.read(), filename=filename)
+        await message.answer_document(
+            document,
+            caption=(
+                f"✅ <b>{q['question']}</b>\n\n"
+                "Ваш персоналізований матеріал у файлі вище 👆"
+            ),
+            reply_markup=kb_after_answer(topic_id, subtopic_id),
+        )
+        log.info(f"PDF надіслано: question_id={q['id']}, user={telegram_id}")
+    except Exception as e:
+        log.error(
+            f"Не вдалося згенерувати/надіслати PDF для question_id={q['id']}, "
+            f"user={telegram_id}: {e}. Надсилаю текстом як підстраховку."
+        )
+        await message.answer(
+            f"<b>❓ {q['question']}</b>\n\n✅ {q['answer']}",
+            reply_markup=kb_after_answer(topic_id, subtopic_id),
+        )
+
+
+# =====================================================================
 # HANDLERS: /start, /menu, /mystatus
 # =====================================================================
 
@@ -221,7 +269,7 @@ async def cmd_help(message: Message):
         "2️⃣ Оберіть тему, що вас цікавить\n"
         "3️⃣ Оберіть конкретне гаряче питання — побачите ціну\n"
         "4️⃣ Натисніть «Перейти до оплати» і оплатіть карткою через LiqPay\n"
-        "5️⃣ Після оплати відповідь відкриється автоматично\n\n"
+        "5️⃣ Після оплати відповідь відкриється автоматично у форматі PDF\n\n"
         "<b>Команди:</b>\n"
         "/start — головне меню та список тем\n"
         "/info — інформація про компанію та контакти\n"
@@ -291,12 +339,16 @@ async def cb_subtopic(call: CallbackQuery):
 
 
 # =====================================================================
-# CALLBACKS: перегляд купленого питання
+# CALLBACKS: перегляд купленого питання (видача PDF)
 # =====================================================================
 
 @dp.callback_query(F.data.startswith("showq:"))
 async def cb_show_question(call: CallbackQuery):
-    """Показує питання+відповідь, якщо воно вже куплене"""
+    """Надсилає персоналізований PDF з питанням+відповіддю, якщо воно вже куплене.
+
+    Примітка: раніше відповідь показувалась текстом прямо в цьому ж
+    повідомленні (edit_text). Тепер PDF надсилається НОВИМ повідомленням-
+    документом — редагувати повідомлення у файл Telegram не дозволяє."""
     question_id = int(call.data.split(":")[1])
 
     if not has_purchased(call.from_user.id, "question", question_id):
@@ -308,16 +360,10 @@ async def cb_show_question(call: CallbackQuery):
         await call.answer("Питання не знайдено", show_alert=True)
         return
 
-    text = (
-        f"<b>❓ {q['question']}</b>\n\n"
-        f"✅ {q['answer']}"
-    )
-
-    await call.message.edit_text(
-        text,
-        reply_markup=kb_after_answer(q["topic_id"], q["subtopic_id"])
-    )
     await call.answer()
+    await send_question_pdf(
+        call.message, q, call.from_user.id, q["topic_id"], q["subtopic_id"]
+    )
 
 
 # =====================================================================
@@ -373,7 +419,7 @@ async def cb_buy_question(call: CallbackQuery):
         "1️⃣ Натисни кнопку нижче\n"
         "2️⃣ Оплати карткою на сайті LiqPay\n"
         "3️⃣ Поверніться сюди — доступ відкриється автоматично\n\n"
-        "⚡ Після оплати відповідь відкривається <b>миттєво</b>!\n\n"
+        "⚡ Після оплати ти одразу отримаєш <b>персоналізований PDF</b> з відповіддю!\n\n"
         f"📄 Оплачуючи, ви погоджуєтесь з <a href=\"{OFFER_URL}\">умовами договору оферти</a>.",
         reply_markup=kb_buy_question(pay_url, question_id, price),
         disable_web_page_preview=True,
@@ -385,17 +431,16 @@ async def cb_buy_question(call: CallbackQuery):
 async def cb_check_question_payment(call: CallbackQuery):
     """Ручна перевірка оплати конкретного питання.
     У продакшені доступ відкривається автоматично через webhook LiqPay —
-    ця кнопка потрібна на випадок, якщо людина повернулась раніше, ніж прийшов webhook."""
+    ця кнопка потрібна на випадок, якщо людина повернулась раніше, ніж прийшов webhook.
+
+    Після підтвердження оплати надсилає персоналізований PDF (замість тексту)."""
     question_id = int(call.data.split(":")[1])
 
     if has_purchased(call.from_user.id, "question", question_id):
         q = get_question_by_id(question_id)
         await call.answer("✅ Оплату підтверджено!", show_alert=True)
-        await call.message.edit_text(
-            f"🎉 <b>Дякуємо за покупку!</b>\n\n"
-            f"<b>❓ {q['question']}</b>\n\n"
-            f"✅ {q['answer']}",
-            reply_markup=kb_after_answer(q["topic_id"], q["subtopic_id"])
+        await send_question_pdf(
+            call.message, q, call.from_user.id, q["topic_id"], q["subtopic_id"]
         )
     else:
         await call.answer(
