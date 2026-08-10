@@ -18,7 +18,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message, CallbackQuery,
-    InlineKeyboardMarkup, BufferedInputFile,
+    InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -56,6 +56,9 @@ dp  = Dispatcher()
 # ID адміністратора — отримай свій через @userinfobot у Telegram
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
+# Скільки питань показувати на одному екрані списку (пагінація)
+QUESTIONS_PER_PAGE = 6
+
 # Посилання на публічну оферту — показуємо перед кожною оплатою
 OFFER_URL = os.getenv(
     "OFFER_URL",
@@ -87,20 +90,26 @@ def kb_topic(topic_id: int) -> InlineKeyboardMarkup:
     for s in subtopics:
         builder.button(
             text=f"📂 {s['title']}",
-            callback_data=f"subtopic:{topic_id}:{s['id']}"
+            callback_data=f"subtopic:{topic_id}:{s['id']}:0"
         )
     builder.button(text="⬅️ Назад до тем", callback_data="menu")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def kb_question_list(topic_id: int, subtopic_id: int, telegram_id: int) -> InlineKeyboardMarkup:
-    """Список питань підтеми. Куплені питання позначені ✅, некуплені — 🔒 з ціною."""
+def kb_question_list(topic_id: int, subtopic_id: int, telegram_id: int, page: int = 0) -> InlineKeyboardMarkup:
+    """Список питань підтеми з пагінацією (по QUESTIONS_PER_PAGE штук на екран).
+    Куплені питання позначені ✅, некуплені — 🔒 з ціною."""
     builder = InlineKeyboardBuilder()
     all_questions = get_questions_by_topic(topic_id)
     qs = [q for q in all_questions if q["subtopic_id"] == subtopic_id]
 
-    for q in qs:
+    total = len(qs)
+    start = page * QUESTIONS_PER_PAGE
+    end = start + QUESTIONS_PER_PAGE
+    page_qs = qs[start:end]
+
+    for q in page_qs:
         short = q["question"]
         if len(short) > 45:
             short = short[:42] + "…"
@@ -108,10 +117,23 @@ def kb_question_list(topic_id: int, subtopic_id: int, telegram_id: int) -> Inlin
             builder.button(text=f"✅ {short}", callback_data=f"showq:{q['id']}")
         else:
             builder.button(text=f"🔒 {short} — {q['price']} грн", callback_data=f"buyq:{q['id']}")
-
-    builder.button(text="⬅️ Назад до теми", callback_data=f"topic:{topic_id}")
-    builder.button(text="🏠 Головне меню",  callback_data="menu")
     builder.adjust(1)
+
+    # Рядок навігації сторінками — показуємо, лише якщо є куди гортати
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(
+            text="⬅️ Назад", callback_data=f"qpage:{topic_id}:{subtopic_id}:{page-1}"
+        ))
+    if end < total:
+        nav_row.append(InlineKeyboardButton(
+            text="Далі ➡️", callback_data=f"qpage:{topic_id}:{subtopic_id}:{page+1}"
+        ))
+    if nav_row:
+        builder.row(*nav_row)
+
+    builder.row(InlineKeyboardButton(text="⬅️ Назад до теми", callback_data=f"topic:{topic_id}"))
+    builder.row(InlineKeyboardButton(text="🏠 Головне меню",  callback_data="menu"))
     return builder.as_markup()
 
 
@@ -314,10 +336,12 @@ async def cb_topic(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("subtopic:"))
 async def cb_subtopic(call: CallbackQuery):
-    """Показує список питань підтеми — куплені відкриті, некуплені з цінником"""
-    _, topic_id_str, subtopic_id_str = call.data.split(":")
-    topic_id    = int(topic_id_str)
-    subtopic_id = int(subtopic_id_str)
+    """Показує список питань підтеми — куплені відкриті, некуплені з цінником.
+    callback_data: subtopic:{topic_id}:{subtopic_id}:{page}"""
+    parts = call.data.split(":")
+    topic_id    = int(parts[1])
+    subtopic_id = int(parts[2])
+    page        = int(parts[3]) if len(parts) > 3 else 0
 
     all_questions = get_questions_by_topic(topic_id)
     qs = [q for q in all_questions if q["subtopic_id"] == subtopic_id]
@@ -330,10 +354,42 @@ async def cb_subtopic(call: CallbackQuery):
     sub_map   = {s["id"]: s["title"] for s in subtopics}
     sub_title = sub_map.get(subtopic_id, "Підтема")
 
+    total = len(qs)
+    pages_count = (total - 1) // QUESTIONS_PER_PAGE + 1
+    page_note = f" (стор. {page + 1}/{pages_count})" if pages_count > 1 else ""
+
     await call.message.edit_text(
-        f"📂 <b>{sub_title}</b>\n\n"
+        f"📂 <b>{sub_title}</b>{page_note}\n\n"
         f"👇 Обери питання. Ціна вказана біля кожного, куплені відкриваються одразу.",
-        reply_markup=kb_question_list(topic_id, subtopic_id, call.from_user.id)
+        reply_markup=kb_question_list(topic_id, subtopic_id, call.from_user.id, page)
+    )
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("qpage:"))
+async def cb_question_page(call: CallbackQuery):
+    """Гортання сторінок списку питань підтеми (кнопки ⬅️ Назад / Далі ➡️).
+    callback_data: qpage:{topic_id}:{subtopic_id}:{page}"""
+    _, topic_id_str, subtopic_id_str, page_str = call.data.split(":")
+    topic_id    = int(topic_id_str)
+    subtopic_id = int(subtopic_id_str)
+    page        = int(page_str)
+
+    all_questions = get_questions_by_topic(topic_id)
+    qs = [q for q in all_questions if q["subtopic_id"] == subtopic_id]
+
+    subtopics = get_subtopics(topic_id)
+    sub_map   = {s["id"]: s["title"] for s in subtopics}
+    sub_title = sub_map.get(subtopic_id, "Підтема")
+
+    total = len(qs)
+    pages_count = (total - 1) // QUESTIONS_PER_PAGE + 1
+    page_note = f" (стор. {page + 1}/{pages_count})" if pages_count > 1 else ""
+
+    await call.message.edit_text(
+        f"📂 <b>{sub_title}</b>{page_note}\n\n"
+        f"👇 Обери питання. Ціна вказана біля кожного, куплені відкриваються одразу.",
+        reply_markup=kb_question_list(topic_id, subtopic_id, call.from_user.id, page)
     )
     await call.answer()
 
@@ -469,7 +525,7 @@ async def cb_back_to_question(call: CallbackQuery):
     await call.message.edit_text(
         f"📂 <b>{sub_title}</b>\n\n"
         f"👇 Обери питання. Ціна вказана біля кожного, куплені відкриваються одразу.",
-        reply_markup=kb_question_list(q["topic_id"], q["subtopic_id"], call.from_user.id)
+        reply_markup=kb_question_list(q["topic_id"], q["subtopic_id"], call.from_user.id, page=0)
     )
     await call.answer()
 
