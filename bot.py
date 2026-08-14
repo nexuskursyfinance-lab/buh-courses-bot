@@ -177,8 +177,8 @@ async def send_question_pdf(
     через технічну помилку генератора PDF.
     """
     try:
-        pdf_buffer = generate_question_pdf(q, telegram_id)
-        filename = build_pdf_filename(q)
+        pdf_buffer, order_ref = generate_question_pdf(q, telegram_id)
+        filename = build_pdf_filename(q, order_ref)
         document = BufferedInputFile(pdf_buffer.read(), filename=filename)
         await message.answer_document(
             document,

@@ -20,8 +20,9 @@
 прибираються, щоб замість них не з'являлись порожні "квадратики".
 
 Використання з bot.py:
-    from pdf_generator import generate_question_pdf
-    pdf_buffer = generate_question_pdf(question_dict, telegram_id)
+    from pdf_generator import generate_question_pdf, build_pdf_filename
+    pdf_buffer, order_ref = generate_question_pdf(question_dict, telegram_id)
+    filename = build_pdf_filename(question_dict, order_ref)
     # pdf_buffer — це BytesIO, готовий для message.answer_document(...)
 """
 
@@ -282,7 +283,7 @@ def _wrap_and_draw_body(
 # ГОЛОВНА ФУНКЦІЯ
 # =====================================================================
 
-def generate_question_pdf(question: dict, telegram_id: int, extra_ref: str = "") -> BytesIO:
+def generate_question_pdf(question: dict, telegram_id: int, extra_ref: str = "") -> tuple[BytesIO, str]:
     """
     Генерує ПЕРСОНАЛІЗОВАНИЙ PDF для конкретного покупця.
 
@@ -294,8 +295,12 @@ def generate_question_pdf(question: dict, telegram_id: int, extra_ref: str = "")
                   він відомий на момент виклику; якщо ні — генерується
                   власний унікальний код доступу.
 
-    Повертає BytesIO з готовим PDF (курсор уже на позиції 0) —
-    прямо для message.answer_document(...) в aiogram.
+    Повертає (buf, order_ref):
+      buf       — BytesIO з готовим PDF (курсор уже на позиції 0), прямо
+                  для message.answer_document(...) в aiogram.
+      order_ref — фактично використаний унікальний код покупки; передайте
+                  його в build_pdf_filename(), щоб ім'я файлу теж було
+                  унікальним для цього покупця (а не однаковим для всіх).
     """
     order_ref = extra_ref or f"TG{telegram_id}-{uuid.uuid4().hex[:8]}"
     date_str = datetime.now().strftime("%d.%m.%Y %H:%M")
@@ -310,10 +315,14 @@ def generate_question_pdf(question: dict, telegram_id: int, extra_ref: str = "")
     c = canvas.Canvas(buf, pagesize=A4)
 
     # --- Метадані файлу (шар захисту №4) ---
+    # PDF-стандарт не має окремого поля "Copyright" — за конвенцією його
+    # вписують у Keywords, це коректно читається в усіх переглядачах PDF
+    # (Файл → Властивості → Ключові слова).
     c.setAuthor("ФОП Кирушок Наталія Юріївна")
     c.setTitle(_clean_text(question.get("question", "Гаряче питання")))
     c.setSubject("Бухгалтерські лайфхаки — Гаряче питання")
     c.setCreator("Бухгалтерські лайфхаки")
+    c.setKeywords(f"© {datetime.now().year} Бухгалтерські лайфхаки. Всі права захищені. {order_ref}")
 
     _draw_watermark(c, watermark_text)
     _draw_header(c, question.get("question", ""))
@@ -327,11 +336,16 @@ def generate_question_pdf(question: dict, telegram_id: int, extra_ref: str = "")
 
     c.save()
     buf.seek(0)
-    return buf
+    return buf, order_ref
 
 
-def build_pdf_filename(question: dict) -> str:
-    """Формує ім'я файлу у форматі ГП_{id}_{коротка_назва}.pdf"""
+def build_pdf_filename(question: dict, order_ref: str) -> str:
+    """Формує ім'я файлу у форматі ГП_{id}_{коротка_назва}_{order_ref}.pdf.
+
+    order_ref обов'язковий (друге значення, яке повертає generate_question_pdf) —
+    без нього різні покупці одного й того ж питання отримували б файли
+    з однаковим ім'ям, хоч і різним вмістом усередині."""
     qid = question.get("id", "0")
     short = _safe_filename(_clean_text(question.get("question", "")))
-    return f"ГП_{qid}_{short}.pdf"
+    safe_ref = re.sub(r'[\\/*?:"<>|]', "", order_ref or "")
+    return f"ГП_{qid}_{short}_{safe_ref}.pdf"
