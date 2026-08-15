@@ -12,6 +12,18 @@
 жодного цифрового файлу), але робить джерело перепродажу
 відстежуваним — якщо файл десь "спливе", видно, чий саме він.
 
+ВІЗУАЛЬНИЙ СТИЛЬ (затверджено на зразку "Зразок шаблону публікації"):
+  - Офіційний роз'яснювальний реєстр: кирилична гарнітура,
+    вирівнювання по ширині, пронумеровані заголовки розділів ВЕЛИКИМИ
+    ЛІТЕРАМИ (1. КОМУ ЦЕ АКТУАЛЬНО, 2. СУТЬ ПИТАННЯ, ...).
+  - Назва питання — 20pt, з відступом мінімум у три рядки перед
+    початком першого розділу (чітке відокремлення заголовка від тексту).
+  - Жоден пронумерований пункт (крок) не розривається між сторінками:
+    якщо пункт цілком не вміщується до кінця сторінки, він переноситься
+    на наступну повністю — разом зі своїм номером, а не окремо.
+  - Так само не залишається "сирітський" заголовок розділу в самому
+    низу сторінки без жодного рядка тексту під ним.
+
 Текст питання в базі містить HTML-розмітку (<b>...</b>, <a href="...">...</a>)
 для показу в Telegram — цей модуль коректно перетворює її на справжнє
 форматування в PDF (жирний текст, посилання як "текст (URL)"), а не
@@ -39,18 +51,12 @@ from reportlab.lib.colors import HexColor, Color
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.utils import simpleSplit
 
 log = logging.getLogger(__name__)
 
 # =====================================================================
 # ШРИФТИ З ПІДТРИМКОЮ КИРИЛИЦІ
 # =====================================================================
-# Стандартні вбудовані шрифти reportlab (Helvetica тощо) НЕ вміють
-# показувати кирилицю. Тому в комплекті йде підпапка fonts/ з двома
-# безкоштовними TTF-файлами (DejaVu Sans, вільна ліцензія).
-# НЕ видаляйте й не перейменовуйте папку fonts/ поруч із цим файлом.
-
 FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 _FONT_REGULAR_PATH = os.path.join(FONTS_DIR, "DejaVuSans.ttf")
 _FONT_BOLD_PATH = os.path.join(FONTS_DIR, "DejaVuSans-Bold.ttf")
@@ -77,13 +83,21 @@ else:
 
 PAGE_W, PAGE_H = A4
 MARGIN = 20 * mm
-NAVY = HexColor("#1F3864")
-GREY = HexColor("#5A5A5A")
 INK = HexColor("#1A1A1A")
+GREY = HexColor("#5A5A5A")
+
+BODY_SIZE = 11
+BODY_LEADING = 15.5
+HEADING_SIZE = 12
+HEADING_LEADING = 16
+TITLE_SIZE = 20
+TITLE_LEADING = 24
+BRAND_SIZE = 9.5
+
 # Водяний знак: ОДИН великий, дуже світлий напис по центру сторінки —
 # як у серйозних платних PDF-продуктів (не "рябить" плитками по всій
 # сторінці). Ідентифікатор покупця лишається присутнім і читабельним
-# при потребі перевірки, але не заважає читати чи друкувати основний текст.
+# при потребі перевірки, але не заважає читанню чи друку.
 WATERMARK_COLOR = Color(0.5, 0.5, 0.5, alpha=0.055)
 WATERMARK_FONT_SIZE = 30
 
@@ -95,41 +109,45 @@ LEGAL_NOTICE = (
     "Договору публічної оферти."
 )
 
+SECTION_TITLES = [
+    "КОМУ ЦЕ АКТУАЛЬНО",
+    "СУТЬ ПИТАННЯ",
+    "ЯК ДІЯТИ ПРАВИЛЬНО",
+    "ПРИКЛАД З ПРАКТИКИ",
+    "ТИПОВІ ПОМИЛКИ",
+    "КОРОТКИЙ ЧЕКЛИСТ",
+    "ДЖЕРЕЛО / НОРМАТИВНА БАЗА",
+]
+
 # =====================================================================
 # ОЧИЩЕННЯ ТЕКСТУ: HTML-розмітка → справжнє форматування, емодзі — геть
 # =====================================================================
 
 _A_TAG = re.compile(r'<a\s+href="([^"]*)">(.*?)</a>', re.IGNORECASE | re.DOTALL)
-# Прибираємо всі теги, ОКРІМ <b> і </b> — їх обробляємо окремо як жирний текст
 _UNKNOWN_TAG = re.compile(r'<(?!/?b\b)[^>]+>', re.IGNORECASE)
 _BOLD_SPLIT = re.compile(r'(<b>|</b>)', re.IGNORECASE)
 
-# Основні блоки Unicode, де живуть emoji — DejaVu Sans їх не містить,
-# тому такі символи прибираються, щоб не показувались "квадратиками".
 _EMOJI_PATTERN = re.compile(
     "["
-    "\U0001F300-\U0001FAFF"  # символи, піктограми (у т.ч. 👤📋❌📌📎🔥💰🏦💡)
-    "\U00002600-\U000027BF"  # інші символи й дінгбати (у т.ч. ⚠️✅)
-    "\U0001F1E6-\U0001F1FF"  # прапори
-    "\U00002B00-\U00002BFF"  # додаткові символи і стрілки
-    "\uFE0F"                  # варіаційний селектор (робить символ кольоровим emoji)
-    "\u200D"                  # zero-width joiner (склеює складові emoji)
+    "\U0001F300-\U0001FAFF"
+    "\U00002600-\U000027BF"
+    "\U0001F1E6-\U0001F1FF"
+    "\U00002B00-\U00002BFF"
+    "\uFE0F"
+    "\u200D"
     "]+"
 )
 
 
 def _clean_text(text: str) -> str:
-    """Перетворює <a href="URL">текст</a> на 'текст (URL)', прибирає емодзі
-    та будь-які HTML-теги, окрім <b>/</b> (їх обробляє _parse_bold_segments)."""
     text = text or ""
     text = _A_TAG.sub(lambda m: f"{m.group(2)} ({m.group(1)})", text)
     text = _UNKNOWN_TAG.sub("", text)
     text = _EMOJI_PATTERN.sub("", text)
-    return text
+    return text.strip()
 
 
 def _parse_bold_segments(line: str):
-    """Розбиває рядок на сегменти [(текст, жирний?), ...] за тегами <b>/</b>."""
     segments = []
     bold = False
     for part in _BOLD_SPLIT.split(line):
@@ -143,7 +161,6 @@ def _parse_bold_segments(line: str):
 
 
 def _tokenize_segments(segments):
-    """[(текст, жирний?), ...] → [(слово_або_пробіл, жирний?), ...]"""
     tokens = []
     for text, bold in segments:
         for part in re.split(r"(\s+)", text):
@@ -153,7 +170,6 @@ def _tokenize_segments(segments):
 
 
 def _wrap_tokens(tokens, max_width, font_size):
-    """Розбиває токени на рядки за шириною сторінки, з урахуванням жирного шрифту."""
     lines, current, current_width = [], [], 0.0
     for word, bold in tokens:
         font = FONT_BOLD if bold else FONT_REGULAR
@@ -176,30 +192,97 @@ def _wrap_tokens(tokens, max_width, font_size):
     return lines
 
 
-def _draw_line(c: canvas.Canvas, line_tokens, x: float, y: float, font_size: float):
+def _line_content_width(line_tokens, font_size):
+    total = 0.0
+    for word, bold in line_tokens:
+        font = FONT_BOLD if bold else FONT_REGULAR
+        total += pdfmetrics.stringWidth(word, font, font_size)
+    return total
+
+
+def _draw_line(c, line_tokens, x, y, font_size, max_width=None, justify=False):
+    """Малює один рядок. Якщо justify=True — розтягує пробіли так, щоб
+    рядок займав рівно max_width (як у друкованих офіційних документах);
+    останній рядок абзацу так ніколи не розтягується."""
+    if justify and max_width:
+        natural = _line_content_width(line_tokens, font_size)
+        gaps = sum(1 for w, _ in line_tokens if w.isspace())
+        extra_per_gap = (max_width - natural) / gaps if gaps > 0 else 0
+    else:
+        extra_per_gap = 0
     cx = x
     for word, bold in line_tokens:
         font = FONT_BOLD if bold else FONT_REGULAR
         c.setFont(font, font_size)
-        c.drawString(cx, y, word)
-        cx += pdfmetrics.stringWidth(word, font, font_size)
+        w = pdfmetrics.stringWidth(word, font, font_size)
+        if word.isspace():
+            cx += w + extra_per_gap
+        else:
+            c.drawString(cx, y, word)
+            cx += w
 
 
 def _safe_filename(text: str, max_len: int = 40) -> str:
-    """Прибирає символи, небезпечні для імені файлу, і обрізає довжину."""
     text = re.sub(r'[\\/*?:"<>|]', "", text or "")
     text = text.strip().replace(" ", "_")
     return text[:max_len] if text else "gp"
 
 
 # =====================================================================
-# МАЛЮВАННЯ СТОРІНКИ
+# СТРУКТУРА ДОКУМЕНТА: перетворюємо 7 полів бази в список "блоків"
 # =====================================================================
 
-def _draw_watermark(c: canvas.Canvas, text: str):
-    """Малює ОДИН великий, дуже світлий діагональний водяний знак по центру
-    сторінки — ідентифікатор покупця лишається присутнім, але не заважає
-    читанню чи друку (на відміну від "рябих" плиткових watermark)."""
+def _split_lines(text):
+    return [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
+
+
+def _build_blocks(question: dict):
+    """Перетворює 7 полів гарячого питання в лінійний список блоків
+    для рендерингу: заголовки розділів, абзаци, пронумеровані пункти,
+    марковані пункти (–) і чеклист (☐) — саме так, як у затвердженому
+    зразку офіційного роз'яснення."""
+    blocks = []
+
+    def heading(i):
+        blocks.append({"type": "heading", "num": i, "title": SECTION_TITLES[i - 1]})
+
+    heading(1)
+    for para in _split_lines(question.get("block_audience", "")):
+        blocks.append({"type": "paragraph", "text": para})
+
+    heading(2)
+    for para in _split_lines(question.get("block_problem", "")):
+        blocks.append({"type": "paragraph", "text": para})
+
+    heading(3)
+    for i, step in enumerate(_split_lines(question.get("block_solution", "")), start=1):
+        blocks.append({"type": "numbered", "n": i, "text": step})
+
+    heading(4)
+    for para in _split_lines(question.get("block_example", "")):
+        blocks.append({"type": "paragraph", "text": para})
+
+    heading(5)
+    for m in _split_lines(question.get("block_mistakes", "")):
+        blocks.append({"type": "bullet", "text": m})
+
+    heading(6)
+    for ch in _split_lines(question.get("block_checklist", "")):
+        blocks.append({"type": "checklist", "text": ch})
+
+    heading(7)
+    for s in _split_lines(question.get("block_sources", "")):
+        blocks.append({"type": "bullet", "text": s})
+
+    blocks.append({"type": "legal"})
+    return blocks
+
+
+# =====================================================================
+# РОЗМІТКА Й МАЛЮВАННЯ
+# =====================================================================
+
+def _draw_watermark(c, text):
     c.saveState()
     c.setFont(FONT_BOLD, WATERMARK_FONT_SIZE)
     c.setFillColor(WATERMARK_COLOR)
@@ -209,73 +292,221 @@ def _draw_watermark(c: canvas.Canvas, text: str):
     c.restoreState()
 
 
-def _draw_footer(c: canvas.Canvas, footer_text: str, page_num: int):
-    """Дрібний прихований ідентифікатор і copyright у футері кожної сторінки."""
+def _draw_footer(c, brand_line, page_num, total_pages, hidden_line):
+    """Видима брендована частина футера (як у зразку) + дрібний прихований
+    рядок з order_id під нею (шар відстеження, майже непомітний)."""
     c.saveState()
-    c.setFont(FONT_REGULAR, 6.5)
+    c.setFont(FONT_REGULAR, 8.5)
     c.setFillColor(GREY)
-    c.drawString(MARGIN, 10 * mm, f"{footer_text} · стор. {page_num}")
+    c.drawString(MARGIN, 13 * mm, brand_line)
+    page_label = f"Стор. {page_num} з {total_pages}"
+    c.drawRightString(PAGE_W - MARGIN, 13 * mm, page_label)
+    c.setFont(FONT_REGULAR, 6)
+    c.drawString(MARGIN, 9 * mm, hidden_line)
     c.restoreState()
 
 
-def _draw_header(c: canvas.Canvas, title: str):
-    """Фірмовий верхній банер із заголовком питання (без emoji — не всі
-    символи є в кириличному шрифті, замість них лишається чистий текст)."""
-    c.saveState()
-    c.setFillColor(NAVY)
-    c.rect(0, PAGE_H - 28 * mm, PAGE_W, 28 * mm, fill=1, stroke=0)
-    c.setFillColor(HexColor("#FFFFFF"))
-    c.setFont(FONT_BOLD, 10)
-    c.drawString(MARGIN, PAGE_H - 11 * mm, "ГАРЯЧЕ ПИТАННЯ · Бухгалтерські лайфхаки")
-    c.setFont(FONT_BOLD, 13)
-    clean_title = _clean_text(title)
-    lines = simpleSplit(clean_title, FONT_BOLD, 13, PAGE_W - 2 * MARGIN)
-    y = PAGE_H - 19 * mm
-    for line in lines[:2]:
-        c.drawString(MARGIN, y, line)
-        y -= 6 * mm
-    c.restoreState()
+def _draw_title(c, title, y, max_width, draw=True):
+    """Назва питання — 20pt, жирний, одразу зверху сторінки (без брендованого
+    рядка над нею — документ має "починатись з назви питання"). Повертає y
+    ПІСЛЯ обов'язкового відступу в 3 рядки перед першим розділом."""
+    clean = _clean_text(title)
+    tokens = _tokenize_segments([(clean, True)])
+    lines = _wrap_tokens(tokens, max_width, TITLE_SIZE)
+    for line in lines:
+        if draw:
+            c.setFillColor(INK)
+            c.setFont(FONT_BOLD, TITLE_SIZE)
+            cx = MARGIN
+            for word, bold in line:
+                c.drawString(cx, y, word)
+                cx += pdfmetrics.stringWidth(word, FONT_BOLD, TITLE_SIZE)
+        y -= TITLE_LEADING
+    # мінімум три рядки відступу перед розділом 1
+    y -= BODY_LEADING * 3
+    return y
 
 
-def _wrap_and_draw_body(
-    c: canvas.Canvas,
-    text: str,
-    watermark_text: str,
-    footer_text: str,
-    start_y: float,
-) -> int:
-    """Пише основний текст (із правильним жирним форматуванням замість
-    буквальних <b> тегів), автоматично переносячи на нові сторінки."""
+# --- вимірювання висоти блоку (для контролю "сиріт") -------------------
+
+def _measure_paragraph(text, font_size, max_width):
+    segments = _parse_bold_segments(_clean_text(text))
+    tokens = _tokenize_segments(segments)
+    return _wrap_tokens(tokens, max_width, font_size)
+
+
+def _measure_numbered(n, text, max_width, indent):
+    label = f"{n})  "
+    content_width = max_width - indent
+    segments = _parse_bold_segments(_clean_text(text))
+    tokens = _tokenize_segments(segments)
+    lines = _wrap_tokens(tokens, content_width, BODY_SIZE)
+    return label, lines
+
+
+def _measure_bullet(text, max_width, indent):
+    content_width = max_width - indent
+    segments = _parse_bold_segments(_clean_text(text))
+    tokens = _tokenize_segments(segments)
+    return _wrap_tokens(tokens, content_width, BODY_SIZE)
+
+
+def _block_height(block, max_width):
+    """Скільки вертикального місця займе блок — потрібно, щоб вирішити,
+    чи влізе заголовок розділу разом з тим, що йде одразу за ним."""
+    btype = block["type"]
+    if btype == "paragraph":
+        lines = _measure_paragraph(block["text"], BODY_SIZE, max_width)
+        return len(lines) * BODY_LEADING + BODY_LEADING * 0.35
+    if btype == "numbered":
+        _, lines = _measure_numbered(block["n"], block["text"], max_width, 16)
+        return len(lines) * BODY_LEADING + BODY_LEADING * 0.3
+    if btype in ("bullet", "checklist"):
+        lines = _measure_bullet(block["text"], max_width, 14)
+        return len(lines) * BODY_LEADING + BODY_LEADING * 0.3
+    return 0
+
+
+# --- основний рендер-цикл ----------------------------------------------
+
+def _render(blocks, question_title, c, watermark_text, brand_footer, hidden_footer,
+            total_pages_hint=None, draw=True):
+    """Проходить усі блоки й або малює їх (draw=True, потрібен реальний
+    canvas), або лише рахує кількість сторінок (draw=False — перший,
+    "сухий" прохід, щоб дізнатись total_pages для футера "Стор. X з Y").
+
+    Повертає фактичну кількість сторінок."""
     max_width = PAGE_W - 2 * MARGIN
-    font_size = 10.5
-    leading = 15
-    y = start_y
     page_num = 1
+    y = PAGE_H - MARGIN
 
-    c.setFillColor(INK)
-
-    for para in (text or "").split("\n"):
-        if not para.strip():
-            y -= leading
-            continue
-
-        segments = _parse_bold_segments(para)
-        tokens = _tokenize_segments(segments)
-        wrapped_lines = _wrap_tokens(tokens, max_width, font_size)
-
-        for line_tokens in wrapped_lines:
-            if y < MARGIN + 15 * mm:
-                _draw_footer(c, footer_text, page_num)
+    def new_page(first=False):
+        nonlocal page_num, y
+        if not first:
+            if draw:
+                _draw_footer(c, brand_footer, page_num, total_pages_hint or page_num, hidden_footer)
                 c.showPage()
-                page_num += 1
-                _draw_watermark(c, watermark_text)
-                c.setFillColor(INK)
-                y = PAGE_H - MARGIN
-            _draw_line(c, line_tokens, MARGIN, y, font_size)
-            y -= leading
-        y -= leading * 0.4
+            page_num += 1
+        if draw:
+            _draw_watermark(c, watermark_text)
+        y = PAGE_H - MARGIN
+        if first:
+            y = _draw_title(c, question_title, y, max_width, draw=draw)
 
-    _draw_footer(c, footer_text, page_num)
+    new_page(first=True)
+    bottom_limit = MARGIN + 16 * mm
+
+    usable_page_h = PAGE_H - MARGIN - bottom_limit
+
+    for idx, block in enumerate(blocks):
+        btype = block["type"]
+
+        if btype == "heading":
+            heading_h = HEADING_LEADING + 6
+            # ПОСИЛЕНИЙ захист від "сирітського" заголовка: заголовок має
+            # лишатись на сторінці РАЗОМ з усім блоком, що йде одразу за
+            # ним (наприклад, розділ 4 не сміє розірватися на "заголовок
+            # + 2 рядки" — інакше бухгалтер, якого відволікли, гортаючи
+            # назад, губить зв'язок між назвою пункту й текстом).
+            next_h = _block_height(blocks[idx + 1], max_width) if idx + 1 < len(blocks) else 0
+            combined = heading_h + next_h
+            if combined <= usable_page_h:
+                # Заголовок + весь наступний блок повністю влазять в одну
+                # сторінку загалом — вимагаємо їх РАЗОМ, без компромісів.
+                if y - combined < bottom_limit:
+                    new_page()
+            else:
+                # Наступний блок сам по собі довший за сторінку (рідкісний
+                # випадок) — не можемо уникнути розриву десь усередині нього,
+                # але заголовку однаково лишаємо суттєвий запас тексту під ним.
+                if y - heading_h - BODY_LEADING * 4 < bottom_limit:
+                    new_page()
+            if draw:
+                c.setFillColor(INK)
+                c.setFont(FONT_BOLD, HEADING_SIZE)
+                c.drawString(MARGIN, y, f"{block['num']}. {block['title']}")
+            y -= heading_h
+
+        elif btype == "paragraph":
+            lines = _measure_paragraph(block["text"], BODY_SIZE, max_width)
+            for i, line in enumerate(lines):
+                if y - BODY_LEADING < bottom_limit:
+                    new_page()
+                if draw:
+                    c.setFillColor(INK)
+                    is_last = (i == len(lines) - 1)
+                    _draw_line(c, line, MARGIN, y, BODY_SIZE, max_width, justify=not is_last)
+                y -= BODY_LEADING
+            y -= BODY_LEADING * 0.35
+
+        elif btype == "numbered":
+            indent = 16
+            label, lines = _measure_numbered(block["n"], block["text"], max_width, indent)
+            item_h = len(lines) * BODY_LEADING
+            # АТОМАРНІСТЬ: якщо весь пункт не влазить до низу сторінки —
+            # переносимо його цілком (з номером) на наступну сторінку.
+            if item_h <= usable_page_h and y - item_h < bottom_limit:
+                new_page()
+            for i, line in enumerate(lines):
+                if y - BODY_LEADING < bottom_limit:
+                    new_page()
+                if draw:
+                    c.setFillColor(INK)
+                    if i == 0:
+                        c.setFont(FONT_BOLD, BODY_SIZE)
+                        c.drawString(MARGIN, y, label)
+                    is_last = (i == len(lines) - 1)
+                    _draw_line(c, line, MARGIN + indent, y, BODY_SIZE, max_width - indent, justify=not is_last)
+                y -= BODY_LEADING
+            y -= BODY_LEADING * 0.3
+
+        elif btype in ("bullet", "checklist"):
+            marker = "\u2610" if btype == "checklist" else "\u2013"
+            indent = 14
+            lines = _measure_bullet(block["text"], max_width, indent)
+            item_h = len(lines) * BODY_LEADING
+            if item_h <= usable_page_h and y - item_h < bottom_limit:
+                new_page()
+            for i, line in enumerate(lines):
+                if y - BODY_LEADING < bottom_limit:
+                    new_page()
+                if draw:
+                    c.setFillColor(INK)
+                    if i == 0:
+                        c.setFont(FONT_BOLD, BODY_SIZE)
+                        c.drawString(MARGIN, y, marker)
+                    _draw_line(c, line, MARGIN + indent, y, BODY_SIZE)
+                y -= BODY_LEADING
+            y -= BODY_LEADING * 0.3
+
+        elif btype == "legal":
+            legal_leading = 11.5
+            lines = _measure_paragraph(LEGAL_NOTICE, 8.5, max_width)
+            # Прив'язуємо примітку до НИЗУ сторінки з чітким, завжди
+            # однаковим відступом від футера — а не одразу після
+            # попереднього контенту (інакше або зливається з футером,
+            # або "висить" по центру з випадковим проміжком).
+            footer_top_y = 13 * mm
+            gap_above_footer = 10 * mm
+            anchor_bottom_y = footer_top_y + gap_above_footer  # y останнього рядка примітки
+            start_y = anchor_bottom_y + (len(lines) - 1) * legal_leading
+
+            if y < start_y + legal_leading:
+                # На поточній сторінці вже недостатньо місця до фіксованої
+                # позиції — переносимо примітку цілком на нову сторінку.
+                new_page()
+
+            draw_y = start_y
+            if draw:
+                c.setFillColor(GREY)
+                for line in lines:
+                    _draw_line(c, line, MARGIN, draw_y, 8.5)
+                    draw_y -= legal_leading
+            y = anchor_bottom_y - legal_leading
+
+    if draw:
+        _draw_footer(c, brand_footer, page_num, total_pages_hint or page_num, hidden_footer)
+
     return page_num
 
 
@@ -285,54 +516,41 @@ def _wrap_and_draw_body(
 
 def generate_question_pdf(question: dict, telegram_id: int, extra_ref: str = "") -> tuple[BytesIO, str]:
     """
-    Генерує ПЕРСОНАЛІЗОВАНИЙ PDF для конкретного покупця.
+    Генерує ПЕРСОНАЛІЗОВАНИЙ PDF для конкретного покупця у затвердженому
+    офіційному стилі (роз'яснення: нумеровані розділи ВЕЛИКИМИ ЛІТЕРАМИ,
+    вирівнювання по ширині, назва 20pt з відступом, пункти не рвуться
+    між сторінками).
 
-    question    — словник з ключами 'question' (заголовок) і 'answer' (текст
-                  відповіді, може містити HTML-розмітку <b>/<a> — обробляється
-                  автоматично) — ті самі поля, які bot.py вже використовує.
-    telegram_id — Telegram ID покупця; вшивається у watermark і footer.
-    extra_ref   — необов'язковий додатковий код (наприклад order_id), якщо
-                  він відомий на момент виклику; якщо ні — генерується
-                  власний унікальний код доступу.
-
-    Повертає (buf, order_ref):
-      buf       — BytesIO з готовим PDF (курсор уже на позиції 0), прямо
-                  для message.answer_document(...) в aiogram.
-      order_ref — фактично використаний унікальний код покупки; передайте
-                  його в build_pdf_filename(), щоб ім'я файлу теж було
-                  унікальним для цього покупця (а не однаковим для всіх).
+    Повертає (buf, order_ref) — buf для message.answer_document(...),
+    order_ref передайте в build_pdf_filename() для унікального імені файлу.
     """
     order_ref = extra_ref or f"TG{telegram_id}-{uuid.uuid4().hex[:8]}"
-    date_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+    date_str = datetime.now().strftime("%d.%m.%Y")
+    datetime_str = datetime.now().strftime("%d.%m.%Y %H:%M")
 
     watermark_text = f"TG ID {telegram_id} · {order_ref} · {date_str}"
-    footer_text = (
-        f"Документ згенеровано для: TG ID {telegram_id}, {order_ref}, {date_str} · "
-        f"© Бухгалтерські лайфхаки · ФОП Кирушок Н.Ю."
-    )
+    brand_footer = f"Бухгалтерські лайфхаки · {date_str} · № ГП-{str(question.get('id', '0')).zfill(3)}"
+    hidden_footer = f"Документ згенеровано для: TG ID {telegram_id}, {order_ref}, {datetime_str} · © Бухгалтерські лайфхаки"
 
+    title = question.get("question", "Гаряче питання")
+    blocks = _build_blocks(question)
+
+    # Прохід 1 ("сухий"): тільки порахувати, скільки сторінок вийде —
+    # потрібно для коректного "Стор. X з Y" у футері (Y відомий заздалегідь).
+    total_pages = _render(blocks, title, None, watermark_text, brand_footer, hidden_footer, draw=False)
+
+    # Прохід 2: реальне малювання з уже відомою кількістю сторінок.
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
 
-    # --- Метадані файлу (шар захисту №4) ---
-    # PDF-стандарт не має окремого поля "Copyright" — за конвенцією його
-    # вписують у Keywords, це коректно читається в усіх переглядачах PDF
-    # (Файл → Властивості → Ключові слова).
     c.setAuthor("ФОП Кирушок Наталія Юріївна")
-    c.setTitle(_clean_text(question.get("question", "Гаряче питання")))
+    c.setTitle(_clean_text(title))
     c.setSubject("Бухгалтерські лайфхаки — Гаряче питання")
     c.setCreator("Бухгалтерські лайфхаки")
     c.setKeywords(f"© {datetime.now().year} Бухгалтерські лайфхаки. Всі права захищені. {order_ref}")
 
-    _draw_watermark(c, watermark_text)
-    _draw_header(c, question.get("question", ""))
-
-    body_text = _clean_text(question.get("answer", ""))
-    body_text += "\n\n" + "—" * 40 + "\n" + LEGAL_NOTICE
-
-    _wrap_and_draw_body(
-        c, body_text, watermark_text, footer_text, start_y=PAGE_H - 34 * mm
-    )
+    _render(blocks, title, c, watermark_text, brand_footer, hidden_footer,
+            total_pages_hint=total_pages, draw=True)
 
     c.save()
     buf.seek(0)
@@ -340,11 +558,6 @@ def generate_question_pdf(question: dict, telegram_id: int, extra_ref: str = "")
 
 
 def build_pdf_filename(question: dict, order_ref: str) -> str:
-    """Формує ім'я файлу у форматі ГП_{id}_{коротка_назва}_{order_ref}.pdf.
-
-    order_ref обов'язковий (друге значення, яке повертає generate_question_pdf) —
-    без нього різні покупці одного й того ж питання отримували б файли
-    з однаковим ім'ям, хоч і різним вмістом усередині."""
     qid = question.get("id", "0")
     short = _safe_filename(_clean_text(question.get("question", "")))
     safe_ref = re.sub(r'[\\/*?:"<>|]', "", order_ref or "")
