@@ -464,6 +464,7 @@ async def cb_buy_question(call: CallbackQuery):
     pay_url = generate_payment_url(
         order_id=order_id,
         telegram_id=telegram_id,
+        amount=price,
         description=f"Гаряче питання: {short_desc}",
     )
 

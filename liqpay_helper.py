@@ -19,22 +19,25 @@ def _sign(data: str) -> str:
     return base64.b64encode(hashlib.sha1(raw.encode()).digest()).decode()
 
 
-def generate_payment_url(order_id: str, telegram_id: int, description: str = "Бухгалтерські питання 100+") -> str:
+def generate_payment_url(order_id: str, telegram_id: int, amount: float = PRICE, description: str = "Бухгалтерські питання 100+") -> str:
     """
     Повертає URL форми оплати LiqPay.
     Параметри відповідають документації LiqPay API v3.
+
+    amount — фактична сума до оплати за конкретне питання.
+    Якщо не передано, використовується стара константа PRICE (99 грн) як запасний варіант.
     """
     # Базова URL для переходу після оплати
     result_url  = os.getenv("RESULT_URL", "https://t.me/your_bot")
     server_url  = os.getenv("SERVER_URL", "https://your-app.herokuapp.com/liqpay/webhook")
 
     params = {
-        "action":      "pay",
-        "amount":      str(PRICE),
-        "currency":    CURRENCY,
+        "action":       "pay",
+        "amount":       str(amount),
+        "currency":     CURRENCY,
         "description": description,
-        "order_id":    order_id,
-        "version":     "3",
+        "order_id":     order_id,
+        "version":      "3",
         "public_key":  LIQPAY_PUBLIC,
         "result_url":  result_url,
         "server_url":  server_url,
