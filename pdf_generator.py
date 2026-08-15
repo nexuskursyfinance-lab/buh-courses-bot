@@ -236,6 +236,21 @@ def _split_lines(text):
     return [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
 
 
+# Деякі питання (особливо перші 27, імпортовані ще старим шляхом) мають
+# власну нумерацію/маркер УЖЕ вписаними в сам текст рядка ("1.  Текст",
+# "•  Текст"). Якщо цього не прибрати, наш код додає ще один шар
+# нумерації зверху, і виходить задвоєння на кшталт "1) 1. Текст"
+# або "–  •  Текст". Тому перед тим, як застосувати ВЛАСНУ нумерацію/
+# маркер, завжди прибираємо будь-який такий "успадкований" префікс.
+_LEADING_MARKER = re.compile(
+    r'^(?:\d+[\.\)]\s+|[•●○\u2022\-\u2013\u2014]\s+|\u2610\s*)+'
+)
+
+
+def _strip_leading_marker(text):
+    return _LEADING_MARKER.sub("", text or "").strip()
+
+
 def _build_blocks(question: dict):
     """Перетворює 7 полів гарячого питання в лінійний список блоків
     для рендерингу: заголовки розділів, абзаци, пронумеровані пункти,
@@ -256,7 +271,7 @@ def _build_blocks(question: dict):
 
     heading(3)
     for i, step in enumerate(_split_lines(question.get("block_solution", "")), start=1):
-        blocks.append({"type": "numbered", "n": i, "text": step})
+        blocks.append({"type": "numbered", "n": i, "text": _strip_leading_marker(step)})
 
     heading(4)
     for para in _split_lines(question.get("block_example", "")):
@@ -264,15 +279,15 @@ def _build_blocks(question: dict):
 
     heading(5)
     for m in _split_lines(question.get("block_mistakes", "")):
-        blocks.append({"type": "bullet", "text": m})
+        blocks.append({"type": "bullet", "text": _strip_leading_marker(m)})
 
     heading(6)
     for ch in _split_lines(question.get("block_checklist", "")):
-        blocks.append({"type": "checklist", "text": ch})
+        blocks.append({"type": "checklist", "text": _strip_leading_marker(ch)})
 
     heading(7)
     for s in _split_lines(question.get("block_sources", "")):
-        blocks.append({"type": "bullet", "text": s})
+        blocks.append({"type": "bullet", "text": _strip_leading_marker(s)})
 
     blocks.append({"type": "legal"})
     return blocks
