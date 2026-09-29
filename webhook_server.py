@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 load_dotenv()
 sys.path.insert(0, os.path.dirname(__file__))
 
-from database import init_db, confirm_payment
+from database import init_db, confirm_payment, get_payment_by_order, get_question_by_id
 from liqpay_helper import verify_webhook, decode_webhook_data
 
 log = logging.getLogger(__name__)
@@ -55,14 +55,13 @@ async def liqpay_webhook(request: web.Request) -> web.Response:
         # 3. Обробляємо тільки успішні платежі
         if status == "success" and order_id:
             raw_json    = json.dumps(payload, ensure_ascii=False)
-            telegram_id = confirm_payment(order_id, raw_json)
+            telegram_id = confirm_payment(order_id, raw_json, paid_amount=payload.get("amount"))
 
             if telegram_id:
                 log.info(f"✅ Платіж підтверджено: {order_id} → user {telegram_id}")
-                # Надсилаємо повідомлення користувачу через Telegram Bot API
-                await notify_user(telegram_id)
+                await notify_user(telegram_id, order_id)
             else:
-                log.warning(f"Платіж {order_id} не знайдено в БД або вже оброблено")
+                log.warning(f"Платіж {order_id} не знайдено, вже оброблено або сума не збігається")
 
         return web.Response(text="ok", status=200)
 
@@ -71,26 +70,33 @@ async def liqpay_webhook(request: web.Request) -> web.Response:
         return web.Response(text="error", status=500)
 
 
-async def notify_user(telegram_id: int):
-    """Надсилає Telegram-повідомлення після підтвердження оплати"""
+async def notify_user(telegram_id: int, order_id: str = None):
+    """Після оплати: повідомлення з кнопкою «Отримати PDF» (PDF генерує бот)."""
     if not BOT_TOKEN:
         return
 
     import aiohttp as _aiohttp
 
-    text = (
-        "🎉 <b>Оплата підтверджена!</b>\n\n"
-        "Дякуємо за покупку! Тепер у тебе є доступ "
-        "до всіх 100+ питань.\n\n"
-        "👉 Натисни /menu щоб обрати тему та завантажити PDF!"
-    )
-    url    = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    params = {
-        "chat_id":    telegram_id,
-        "text":       text,
-        "parse_mode": "HTML",
-    }
+    title, qid = "", None
+    try:
+        pay = get_payment_by_order(order_id) if order_id else None
+        if pay and pay.get("item_type") == "question":
+            qid = pay["item_id"]
+            q = get_question_by_id(qid)
+            if q:
+                import html as _h
+                title = f"\n\n<b>{_h.escape(q.get('code') or '')}</b> · {_h.escape(q['title'])}"
+    except Exception as e:
+        log.warning(f"Не вдалося знайти питання для {order_id}: {e}")
 
+    text = "🎉 <b>Оплату отримано, дякуємо!</b>" + title + "\n\nНатисніть кнопку — бот надішле ваш PDF 👇"
+    params = {"chat_id": telegram_id, "text": text, "parse_mode": "HTML"}
+    if qid:
+        params["reply_markup"] = {"inline_keyboard": [[{"text": "📄 Отримати PDF", "callback_data": f"showq:{qid}"}]]}
+    else:
+        params["text"] = "🎉 <b>Оплату отримано, дякуємо!</b>\n\nВідкрийте /mystatus, щоб отримати PDF."
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     async with _aiohttp.ClientSession() as session:
         async with session.post(url, json=params) as resp:
             if resp.status != 200:

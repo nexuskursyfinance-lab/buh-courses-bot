@@ -62,8 +62,9 @@ def verify_webhook(data: str, signature: str) -> bool:
     Перевіряє підпис webhook від LiqPay.
     Повертає True якщо підпис валідний.
     """
-    expected = _sign(data)
-    return expected == signature
+    import hmac
+    expected = _sign(data or "")
+    return hmac.compare_digest(expected, signature or "")
 
 
 def decode_webhook_data(data: str) -> dict:
