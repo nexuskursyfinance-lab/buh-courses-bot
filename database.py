@@ -490,6 +490,22 @@ def confirm_payment(order_id, raw_json=None, paid_amount=None):
     return row["user_id"]
 
 
+def get_pending_payments(telegram_id, item_type, item_id, limit=5):
+    """Незавершені (pending) платежі користувача за конкретний товар, найновіші першими."""
+    conn = get_connection()
+    cur = conn.cursor()
+    p = "%s" if USE_POSTGRES else "?"
+    cur.execute(
+        f"""SELECT order_id, amount FROM payments
+            WHERE user_id = {p} AND item_type = {p} AND item_id = {p} AND status = 'pending'
+            ORDER BY id DESC LIMIT {int(limit)}""",
+        (telegram_id, item_type, item_id),
+    )
+    rows = _rows_to_dicts(cur.fetchall())
+    conn.close()
+    return rows
+
+
 def get_payment_by_order(order_id):
     conn = get_connection()
     cur = conn.cursor()

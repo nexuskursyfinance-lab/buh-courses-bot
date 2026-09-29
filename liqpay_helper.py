@@ -74,3 +74,25 @@ def decode_webhook_data(data: str) -> dict:
         return json.loads(decoded)
     except Exception:
         return {}
+
+
+def check_payment_status(order_id: str) -> dict:
+    """Запитує статус платежу напряму в LiqPay (API action=status).
+    Потрібно на випадок, якщо callback (webhook) від LiqPay не дійшов.
+    Повертає словник відповіді LiqPay або {} у разі помилки."""
+    import urllib.parse
+    import urllib.request
+    params = {
+        "action": "status",
+        "version": "3",
+        "public_key": LIQPAY_PUBLIC,
+        "order_id": order_id,
+    }
+    data = base64.b64encode(json.dumps(params).encode()).decode()
+    body = urllib.parse.urlencode({"data": data, "signature": _sign(data)}).encode()
+    try:
+        req = urllib.request.Request("https://www.liqpay.ua/api/request", data=body, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return {}

@@ -42,11 +42,11 @@ from database import (
     init_db, upsert_user,
     get_catalog_topics, get_catalog_subtopics, get_questions_by_subtopic, get_subtopic,
     get_question_by_id, get_question_by_code, question_content, search_questions,
-    create_payment, check_rate_limit, get_stats,
+    create_payment, confirm_payment, get_pending_payments, check_rate_limit, get_stats,
     has_purchased, get_user_purchases,
     list_posts, get_post, update_post, due_posts, busy_slots,
 )
-from liqpay_helper import generate_payment_url
+from liqpay_helper import generate_payment_url, check_payment_status
 from pdf_nk import generate_nk_pdf, build_nk_filename
 
 try:  # старий генератор — лише для питань, куплених до v2
@@ -529,9 +529,23 @@ async def cb_buy_question(call: CallbackQuery):
     await call.answer()
 
 
+async def sync_payments_from_liqpay(telegram_id: int, question_id: int) -> bool:
+    """Якщо callback від LiqPay не дійшов — питаємо статус платежу в LiqPay напряму."""
+    for p in get_pending_payments(telegram_id, "question", question_id):
+        resp = await asyncio.to_thread(check_payment_status, p["order_id"])
+        status = (resp or {}).get("status")
+        log.info(f"LiqPay status {p['order_id']}: {status}")
+        if status in ("success", "sandbox"):
+            confirm_payment(p["order_id"], json.dumps(resp, ensure_ascii=False), paid_amount=resp.get("amount"))
+            return True
+    return False
+
+
 @dp.callback_query(F.data.startswith("checkq:"))
 async def cb_check_question_payment(call: CallbackQuery):
     question_id = int(call.data.split(":")[1])
+    if not has_purchased(call.from_user.id, "question", question_id):
+        await sync_payments_from_liqpay(call.from_user.id, question_id)
     if has_purchased(call.from_user.id, "question", question_id):
         q = get_question_by_id(question_id)
         await call.answer("✅ Оплату підтверджено!")
