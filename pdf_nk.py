@@ -275,4 +275,5 @@ def generate_nk_pdf(g: dict, telegram_id: int, content_date: str = None):
 
 
 def build_nk_filename(g: dict, order_ref: str) -> str:
-    return f"{g['code']}_{order_ref}.pdf"
+    # Зрозуміла назва для покупця; номер замовлення лишається у водяному знаку
+    return f"{g['code']} Бухгалтерські лайфхаки.pdf"
