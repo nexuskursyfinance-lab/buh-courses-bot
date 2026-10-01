@@ -80,6 +80,9 @@ POST_SLOTS = [s.strip() for s in os.getenv("POST_SLOTS", "10:00,18:30").split(",
 QUESTIONS_PER_PAGE = 8
 MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "media")
 
+VIBER_CHANNEL_URL = os.getenv("VIBER_CHANNEL_URL", "https://invite.viber.com/?g2=AQBPWuCs%2BE1%2F%2F1c%2BLvcR94IxNaSXZizpgqc8p5lIdsJRCTBZeW8%2FmItyOp5Api1y")
+VIBER_CHAT_URL = os.getenv("VIBER_CHAT_URL", "https://invite.viber.com/?g2=AQBvkk%2FKfZwBJlc%2BL7l9DtVJhNxDayFpxdr237eG1w2Rrl3RJ8hRNomscFPzMBUV")
+
 OFFER_URL = os.getenv(
     "OFFER_URL",
     "https://docs.google.com/document/d/1R28gdhIqzg1-DjVdcVWJ6bhzDH5aUbbEn6rfPBT8Whs/view",
@@ -144,6 +147,7 @@ def kb_main_menu() -> InlineKeyboardMarkup:
         b.button(text=f"{t['emoji']} {t['title']} · {t['cnt']}", callback_data=f"topic:{t['id']}")
     b.button(text="🔎 Пошук за словом", callback_data="search")
     b.button(text="📦 Мої покупки", callback_data="mine")
+    b.button(text="📲 Ми у Viber", callback_data="viber")
     b.adjust(1)
     return b.as_markup()
 
@@ -390,6 +394,7 @@ async def cmd_help(message: Message):
         "/start — головне меню\n"
         "/mystatus — мої покупки\n"
         "/info — інформація про компанію\n"
+        "/viber — ми у Viber\n"
         "/help — ця довідка\n\n"
         "Питання чи проблеми з оплатою?\n"
         "📧 nexus.kursy.finance@gmail.com\n"
@@ -420,6 +425,31 @@ async def cb_mine(call: CallbackQuery):
     text, kb = await purchases_screen(call.from_user.id)
     await safe_edit(call, text, kb)
     await call.answer()
+
+
+def kb_viber() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Viber-канал", url=VIBER_CHANNEL_URL)],
+        [InlineKeyboardButton(text="💬 Viber-спільнота · чат", url=VIBER_CHAT_URL)],
+        [InlineKeyboardButton(text="🏠 Меню", callback_data="menu")],
+    ])
+
+
+VIBER_TEXT = ("📲 <b>Бухгалтерські лайфхаки у Viber</b>\n\n"
+              "📢 <b>Канал</b> — ті самі гарячі питання з нормою і прикладом.\n"
+              "💬 <b>Спільнота</b> — обговорюємо ПДВ, ФОП і звітність разом.\n\n"
+              "Повні розбори (PDF) — тут, у боті.")
+
+
+@dp.callback_query(F.data == "viber")
+async def cb_viber(call: CallbackQuery):
+    await safe_edit(call, VIBER_TEXT, kb_viber())
+    await call.answer()
+
+
+@dp.message(Command("viber"))
+async def cmd_viber(message: Message):
+    await message.answer(VIBER_TEXT, reply_markup=kb_viber(), disable_web_page_preview=True)
 
 
 @dp.callback_query(F.data == "search")
