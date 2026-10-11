@@ -8,7 +8,7 @@
 - список питань з ПОВНИМИ назвами й цінами, кнопки з номерами ГП;
 - картка питання: ситуація + що всередині + ціна (безкоштовний тизер);
 - пошук: просто напишіть слово в чат (або /gp 01);
-- deep link: t.me/<бот>?start=gp01 відкриває картку ГП-01;
+- deep link: t.me/<бот>?start=gp01 відкриває картку ГП-01, ?start=b021 — Б-021;
 - PDF у фірмовому стилі NK (pdf_nk.py) з водяним знаком покупця;
 - черга публікацій у канал: /queue (лише ADMIN_ID), превʼю і кнопки.
 
@@ -41,7 +41,7 @@ load_dotenv()
 from database import (
     init_db, upsert_user,
     get_catalog_topics, get_catalog_subtopics, get_questions_by_subtopic, get_subtopic,
-    get_question_by_id, get_question_by_code, question_content, search_questions,
+    get_question_by_id, get_question_by_code, question_content, search_questions, code_slug,
     create_payment, confirm_payment, get_pending_payments, check_rate_limit, get_stats,
     has_purchased, get_user_purchases,
     list_posts, get_post, update_post, due_posts, busy_slots,
@@ -135,6 +135,11 @@ def first_sentence(text: str, limit: int = 220) -> str:
 def gp_num(code: str) -> str:
     m = re.search(r"(\d+)", code or "")
     return "%02d" % int(m.group(1)) if m else ""
+
+
+def start_param(code: str) -> str:
+    """Параметр deep link: ГП-01 → gp01, Б-021 → b021."""
+    return code_slug(code) or ("gp" + gp_num(code))
 
 
 # =====================================================================
@@ -306,7 +311,7 @@ async def cmd_start(message: Message, command: CommandObject):
     upsert_user(telegram_id=user.id, username=user.username, full_name=user.full_name)
     arg = (command.args or "").strip().lower()
     log.info(f"/start {user.id} (@{user.username}) arg={arg!r}")
-    if arg.startswith("gp"):
+    if re.match(r"^(gp|b|k|f|p)\d", arg):
         q = get_question_by_code(arg)
         if q:
             text, kb = question_card(q, user.id)
@@ -636,8 +641,7 @@ def next_free_slot():
 
 async def post_caption(p: dict) -> str:
     uname = await bot_username()
-    num = gp_num(p.get("gp_code"))
-    link = f'<a href="https://t.me/{uname}?start=gp{num}">відкрити в боті</a>'
+    link = f'<a href="https://t.me/{uname}?start={start_param(p.get("gp_code"))}">відкрити в боті</a>'
     text = esc(p["text"])
     if "[посилання]" in text:
         text = text.replace("[посилання]", link)

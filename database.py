@@ -729,7 +729,7 @@ def sync_catalog(force=False):
         num = int(re.sub(r"\D", "", g["code"]) or 0)
         _upsert(cur, "questions", {"code": g["code"]}, {
             "topic_id": tid, "subtopic_id": sid,
-            "slug": "gp-%02d" % num,
+            "slug": ("gp-%02d" % num) if g["code"].startswith("ГП") else code_slug(g["code"]),
             "title": g["title"],
             "block_audience": g.get("who", ""),
             "block_problem": _strip_tags(g.get("situation", "")),
@@ -740,7 +740,7 @@ def sync_catalog(force=False):
             "is_active": 1 if g.get("active", True) else 0,
             "content_json": json.dumps(g, ensure_ascii=False),
             "search_text": _search_blob(g),
-            "sort_order": num,
+            "sort_order": num if g["code"].startswith("ГП") else 1000 + num,
         })
 
     # 4) пости: додаємо нові, текст оновлюємо лише в чернетках (статус не чіпаємо)
@@ -822,12 +822,36 @@ def get_subtopic(subtopic_id):
     return _row_to_dict(row)
 
 
-def get_question_by_code(code):
-    """code: 'ГП-01', 'gp01', 'gp-1', '1' — усе розпізнається."""
-    m = re.search(r"(\d+)", str(code or ""))
+_CODE_PREFIX = {"гп": "ГП", "gp": "ГП", "б": "Б", "b": "Б", "к": "К", "k": "К",
+                "ф": "Ф", "f": "Ф", "п": "П", "p": "П"}
+_CODE_LATIN = {"ГП": "gp", "Б": "b", "К": "k", "Ф": "f", "П": "p"}
+
+
+def normalize_code(code):
+    """'ГП-01', 'gp01', 'gp-1', '1' → 'ГП-01'; 'Б-021', 'b021', 'б21' → 'Б-021'."""
+    s = str(code or "").strip().lower()
+    m = re.match(r"^(гп|gp|б|b|к|k|ф|f|п|p)?[\s\-_]*0*(\d+)$", s)
     if not m:
         return None
-    norm = "ГП-%02d" % int(m.group(1))
+    pref = _CODE_PREFIX.get(m.group(1) or "гп", "ГП")
+    n = int(m.group(2))
+    return ("ГП-%02d" % n) if pref == "ГП" else ("%s-%03d" % (pref, n))
+
+
+def code_slug(code):
+    """Латинський slug/параметр deep link: 'ГП-01' → 'gp01', 'Б-021' → 'b021'."""
+    norm = normalize_code(code)
+    if not norm:
+        return ""
+    pref, num = norm.split("-")
+    return _CODE_LATIN.get(pref, "x") + num
+
+
+def get_question_by_code(code):
+    """code: 'ГП-01', 'gp01', 'gp-1', '1', 'Б-021', 'b021' — усе розпізнається."""
+    norm = normalize_code(code)
+    if not norm:
+        return None
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(f"SELECT id FROM questions WHERE code = {_ph()} AND is_active = 1", (norm,))
