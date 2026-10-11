@@ -722,16 +722,17 @@ def sync_catalog(force=False):
                           {"name": s["name"], "sort_order": s.get("sort", 100), "is_active": 1})
             sub_ids[(t["slug"], s["slug"])] = sid
 
-    # 3а) перейменування кодів (ГП-01 → Б-001): той самий рядок у БД, тож id питання,
-    #      покупки й платежі не змінюються
+    # 3а) перейменування кодів (напр. Б-022 → ГП-22): той самий рядок у БД, тож id питання,
+    #      покупки й платежі не змінюються. Старі коди — у полі "aliases".
     for g in items:
-        old, new = g.get("old_code"), g["code"]
-        if not old or old == new:
-            continue
-        cur.execute(f"SELECT id FROM questions WHERE code = {p}", (new,))
-        if cur.fetchone() is None:
-            cur.execute(f"UPDATE questions SET code = {p} WHERE code = {p}", (new, old))
-        cur.execute(f"UPDATE posts SET gp_code = {p} WHERE gp_code = {p}", (new, old))
+        new = g["code"]
+        for old in g.get("aliases") or []:
+            if not old or old == new:
+                continue
+            cur.execute(f"SELECT id FROM questions WHERE code = {p}", (new,))
+            if cur.fetchone() is None:
+                cur.execute(f"UPDATE questions SET code = {p} WHERE code = {p}", (new, old))
+            cur.execute(f"UPDATE posts SET gp_code = {p} WHERE gp_code = {p}", (new, old))
 
     # 3) питання
     for g in items:
@@ -838,27 +839,23 @@ _CODE_PREFIX = {"гп": "ГП", "gp": "ГП", "б": "Б", "b": "Б", "к": "К",
 _CODE_LATIN = {"ГП": "gp", "Б": "b", "К": "k", "Ф": "f", "П": "p"}
 
 
-LEGACY_GP_MAX = 20  # ГП-01…20 перейменовано на Б-001…020 (старі посилання gp01… працюють)
-
-
 def normalize_code(code):
-    """'Б-001', 'b1', '1' → 'Б-001'; старі 'ГП-01', 'gp01', 'gp-1' → 'Б-001';
-    'Б-021', 'b021', 'б21' → 'Б-021'; 'К-005', 'k5' → 'К-005'."""
+    """Покупцю всі питання показуються як ГП-01, ГП-02 … (наскрізна нумерація).
+    'ГП-01', 'gp01', 'gp-1', '1' → 'ГП-01'; колишні внутрішні 'Б-022', 'b022', 'б22' → 'ГП-22'
+    (посилання ?start=b0NN, що існували 11.10, працюють); 'К-005', 'k5' → 'К-005'."""
     s = str(code or "").strip().lower()
     m = re.match(r"^(гп|gp|б|b|к|k|ф|f|п|p)?[\s\-_]*0*(\d+)$", s)
     if not m:
         return None
-    pref = _CODE_PREFIX.get(m.group(1) or "б", "Б")
+    pref = _CODE_PREFIX.get(m.group(1) or "гп", "ГП")
     n = int(m.group(2))
-    if pref == "ГП":
-        if n <= LEGACY_GP_MAX:
-            return "Б-%03d" % n
+    if pref in ("ГП", "Б"):
         return "ГП-%02d" % n
     return "%s-%03d" % (pref, n)
 
 
 def code_slug(code):
-    """Латинський slug/параметр deep link: 'Б-001' → 'b001', 'Б-021' → 'b021'."""
+    """Латинський slug/параметр deep link: 'ГП-01' → 'gp01', 'ГП-21' → 'gp21'."""
     norm = normalize_code(code)
     if not norm:
         return ""
@@ -867,7 +864,7 @@ def code_slug(code):
 
 
 def get_question_by_code(code):
-    """code: 'Б-001', 'b1', '1', старі 'ГП-01'/'gp01', 'Б-021', 'b021' — усе розпізнається."""
+    """code: 'ГП-01', 'gp01', 'gp-1', '1', а також колишні 'Б-021'/'b021' — усе розпізнається."""
     norm = normalize_code(code)
     if not norm:
         return None
