@@ -164,7 +164,7 @@ def _make_canvas(buyer, date, code):
             c.setFillColor(INK); c.setFont("M600", 7.2)
             c.drawRightString(w - RM, 12 * mm, f"{code} · стор. {self._pageNumber} з {total}")
             c.setFillColor(GREY); c.setFont("M400", 5.9)
-            c.drawString(LM, 8.5 * mm, "© Бухгалтерські лайфхаки. Об'єкт авторського права (ст. 8, 15 Закону України «Про авторське право і суміжні права»).")
+            c.drawString(LM, 8.5 * mm, "© Бухгалтерські лайфхаки. Об'єкт авторського права відповідно до Закону України «Про авторське право і суміжні права» від 01.12.2022 № 2811-IX.")
             c.drawString(LM, 5.8 * mm, "Розповсюдження та перепродаж без згоди правовласника заборонені.")
             c.setStrokeColor(RULE); c.setLineWidth(0.4)
             for y in (h / 2 + 40 * mm, h / 2 - 40 * mm): c.circle(11 * mm, y, 1.6 * mm)
