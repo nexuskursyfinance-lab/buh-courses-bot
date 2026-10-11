@@ -125,10 +125,26 @@ def tg_safe(text: str) -> str:
     return t.replace("&lt;b&gt;", "<b>").replace("&lt;/b&gt;", "</b>")
 
 
+_ABBR = {"п", "пп", "ст", "ч", "абз", "розд", "підрозд", "грн", "тис", "млн", "напр",
+         "див", "т", "д", "ін", "р", "рр", "м", "вул", "обл"}
+
+
 def first_sentence(text: str, limit: int = 220) -> str:
-    plain = re.sub(r"<[^>]+>", "", text or "")
-    m = re.match(r"(.+?[.!?])(\s|$)", plain)
-    s = m.group(1) if m else plain
+    """Перше речення без обрізання на скороченнях («п.», «ст.», «грн.»)
+    і на десяткових номерах пунктів («63.3»)."""
+    plain = re.sub(r"<[^>]+>", "", text or "").strip()
+    s = plain
+    for m in re.finditer(r"[.!?](?=\s|$)", plain):
+        end = m.end()
+        if m.group() == ".":
+            prev = re.search(r"(\w+)\.$", plain[:end])
+            if prev and prev.group(1).lower() in _ABBR:
+                continue
+        nxt = plain[end:].lstrip()[:1]
+        if nxt and not (nxt.isupper() or nxt.isdigit() or nxt in "«\"(—"):
+            continue
+        s = plain[:end]
+        break
     return s if len(s) <= limit else s[: limit - 1].rstrip() + "…"
 
 
