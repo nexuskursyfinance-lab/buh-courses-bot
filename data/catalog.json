@@ -36,6 +36,16 @@
      "slug": "nerezydenty",
      "name": "Послуги нерезидентів",
      "sort": 60
+    },
+    {
+     "slug": "eksport-vystavky",
+     "name": "Експорт і виставки",
+     "sort": 70
+    },
+    {
+     "slug": "sea-pdv",
+     "name": "Рахунок у СЕА ПДВ",
+     "sort": 80
     }
    ]
   },
@@ -69,6 +79,11 @@
      "slug": "kved-litsenziyi",
      "name": "КВЕД, ліцензії, фінмоніторинг",
      "sort": 50
+    },
+    {
+     "slug": "zagalna-systema",
+     "name": "ФОП на загальній і самозайняті",
+     "sort": 60
     }
    ]
   },
@@ -109,6 +124,29 @@
     {
      "slug": "e-kabinet",
      "name": "Електронний кабінет і КЕП",
+     "sort": 20
+    },
+    {
+     "slug": "finzvitnist",
+     "name": "Фінансова звітність",
+     "sort": 30
+    }
+   ]
+  },
+  {
+   "slug": "tov",
+   "name": "ТОВ: фінансування і реєстрація",
+   "emoji": "🏢",
+   "sort": 50,
+   "subtopics": [
+    {
+     "slug": "finansuvannya",
+     "name": "Фінансування і фіндопомога",
+     "sort": 10
+    },
+    {
+     "slug": "reyestratsiya-zminy",
+     "name": "Реєстраційні зміни",
      "sort": 20
     }
    ]
