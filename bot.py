@@ -80,6 +80,17 @@ CHANNEL_ID = os.getenv("CHANNEL_ID", "").strip()          # @назва_кана
 POST_SLOTS = [s.strip() for s in os.getenv("POST_SLOTS", "10:00,18:30").split(",") if s.strip()]
 QUESTIONS_PER_PAGE = 8
 MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "media")
+FREE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "free")
+
+
+def free_items() -> list:
+    """Безкоштовні матеріали (магніти) з data/free/free.json."""
+    try:
+        with open(os.path.join(FREE_DIR, "free.json"), encoding="utf-8") as f:
+            return json.load(f).get("items", [])
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"free.json не прочитано: {e}")
+        return []
 
 VIBER_CHANNEL_URL = os.getenv("VIBER_CHANNEL_URL", "https://invite.viber.com/?g2=AQBPWuCs%2BE1%2F%2F1c%2BLvcR94IxNaSXZizpgqc8p5lIdsJRCTBZeW8%2FmItyOp5Api1y")
 VIBER_CHAT_URL = os.getenv("VIBER_CHAT_URL", "https://invite.viber.com/?g2=AQBvkk%2FKfZwBJlc%2BL7l9DtVJhNxDayFpxdr237eG1w2Rrl3RJ8hRNomscFPzMBUV")
@@ -165,6 +176,8 @@ def start_param(code: str) -> str:
 
 def kb_main_menu() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    if free_items():
+        b.button(text="🎁 Безкоштовно: календарі й пам'ятки", callback_data="free")
     for t in get_catalog_topics():
         b.button(text=f"{t['emoji']} {t['title']} · {t['cnt']}", callback_data=f"topic:{t['id']}")
     b.button(text="🔎 Пошук за словом", callback_data="search")
@@ -328,6 +341,15 @@ async def cmd_start(message: Message, command: CommandObject):
     upsert_user(telegram_id=user.id, username=user.username, full_name=user.full_name)
     arg = (command.args or "").strip().lower()
     log.info(f"/start {user.id} (@{user.username}) arg={arg!r}")
+    if arg == "free" or arg.startswith("free_"):
+        item_id = arg[5:] if arg.startswith("free_") else ""
+        item = next((i for i in free_items() if i["id"] == item_id), None)
+        if item:
+            await send_free_item(message, item, user.id)
+        else:
+            text, kb = free_screen()
+            await message.answer(text, reply_markup=kb, disable_web_page_preview=True)
+        return
     if re.match(r"^(gp|b|k|f|p)\d", arg):
         q = get_question_by_code(arg)
         if q:
@@ -416,6 +438,7 @@ async def cmd_help(message: Message):
         "/start — головне меню\n"
         "/mystatus — мої покупки\n"
         "/info — інформація про компанію\n"
+        "/free — безкоштовні календарі й пам'ятки\n"
         "/viber — ми у Viber\n"
         "/help — ця довідка\n\n"
         "Питання чи проблеми з оплатою?\n"
@@ -447,6 +470,70 @@ async def cb_mine(call: CallbackQuery):
     text, kb = await purchases_screen(call.from_user.id)
     await safe_edit(call, text, kb)
     await call.answer()
+
+
+# =====================================================================
+# БЕЗКОШТОВНІ МАТЕРІАЛИ (магніти)
+# =====================================================================
+
+def free_screen():
+    items = free_items()
+    text = ("🎁 <b>Безкоштовно</b>\n\n"
+            "Календарі й пам'ятки, які зручно тримати під рукою. "
+            "Оберіть, що надіслати 👇")
+    b = InlineKeyboardBuilder()
+    for i in items:
+        b.button(text=i["button"], callback_data=f"free:{i['id']}")
+    b.button(text="🏠 Меню", callback_data="menu")
+    b.adjust(1)
+    return text, b.as_markup()
+
+
+async def send_free_item(message: Message, item: dict, telegram_id: int):
+    log.info(f"FREE {item['id']} -> {telegram_id}")
+    await message.answer(f"🎁 <b>{esc(item['title'])}</b>\n\n{esc(item['text'])}", disable_web_page_preview=True)
+    for fname, shown in item.get("files", []):
+        path = os.path.join(FREE_DIR, fname)
+        if os.path.exists(path):
+            await message.answer_document(FSInputFile(path, filename=shown))
+        else:
+            log.warning(f"FREE: немає файлу {path}")
+    b = InlineKeyboardBuilder()
+    for code in item.get("related", []):
+        q = get_question_by_code(code)
+        if q and q.get("is_active"):
+            b.button(text=f"📘 {code}: {q['title'][:45]}", callback_data=f"q:{q['id']}")
+    b.button(text="🎁 Інші безкоштовні", callback_data="free")
+    b.button(text="🏠 Меню", callback_data="menu")
+    b.adjust(1)
+    await message.answer("Повні розбори з нормами, прикладами й помилками — у платних ГП 👇",
+                         reply_markup=b.as_markup())
+
+
+@dp.callback_query(F.data == "free")
+async def cb_free(call: CallbackQuery):
+    text, kb = free_screen()
+    await safe_edit(call, text, kb)
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("free:"))
+async def cb_free_item(call: CallbackQuery):
+    item = next((i for i in free_items() if i["id"] == call.data.split(":", 1)[1]), None)
+    if not item:
+        await call.answer("Матеріал не знайдено", show_alert=True)
+        return
+    if not check_rate_limit(call.from_user.id, "free", 10):
+        await call.answer("⏳ Забагато запитів. Спробуйте за кілька хвилин.", show_alert=True)
+        return
+    await call.answer("Надсилаю…")
+    await send_free_item(call.message, item, call.from_user.id)
+
+
+@dp.message(Command("free"))
+async def cmd_free(message: Message):
+    text, kb = free_screen()
+    await message.answer(text, reply_markup=kb, disable_web_page_preview=True)
 
 
 def kb_viber() -> InlineKeyboardMarkup:

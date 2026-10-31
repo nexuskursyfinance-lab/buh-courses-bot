@@ -1,0 +1,318 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//NK//Kalendar PDV//UK
+CALSCALE:GREGORIAN
+X-WR-CALNAME:Календар ПДВ NK
+BEGIN:VEVENT
+UID:5861ffae-603c-4398-985f-2196f215536c@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261105
+DTEND;VALUE=DATE:20261106
+SUMMARY:СТРОК ПДВ: Зареєструвати ПН і РК\, складені 01–15.10
+DESCRIPTION:Первинка і ПН на підпис\, ліміт реєстрації на СЕА\, КЕП. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:СТРОК ПДВ: Зареєструвати ПН і РК\, складені 01–15.10
+TRIGGER:-PT15H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:b85c049c-09f7-4ce8-891d-594a96e39cdc@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261103
+DTEND;VALUE=DATE:20261104
+SUMMARY:Почати: Зареєструвати ПН і РК\, складені 01–15.10 (строк 05.11)
+DESCRIPTION:Первинка і ПН на підпис\, ліміт реєстрації на СЕА\, КЕП. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Почати: Зареєструвати ПН і РК\, складені 01–15.10 (строк 05.11)
+TRIGGER:PT9H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:3649d5b9-c107-4262-80de-521196382a47@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261118
+DTEND;VALUE=DATE:20261119
+SUMMARY:СТРОК ПДВ: Зареєструвати ПН і РК\, складені 16–31.10
+DESCRIPTION:Первинка і ПН на підпис\, ліміт реєстрації на СЕА\, КЕП. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:СТРОК ПДВ: Зареєструвати ПН і РК\, складені 16–31.10
+TRIGGER:-PT15H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:0600c010-3876-4f21-a06d-5156f213300c@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261116
+DTEND;VALUE=DATE:20261117
+SUMMARY:Почати: Зареєструвати ПН і РК\, складені 16–31.10 (строк 18.11)
+DESCRIPTION:Первинка і ПН на підпис\, ліміт реєстрації на СЕА\, КЕП. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Почати: Зареєструвати ПН і РК\, складені 16–31.10 (строк 18.11)
+TRIGGER:PT9H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:bfaf7cf0-1311-4c30-9ccc-a11fa2bccbca@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261120
+DTEND;VALUE=DATE:20261121
+SUMMARY:СТРОК ПДВ: Подати декларацію з ПДВ за жовтень
+DESCRIPTION:Реєстри виданих і отриманих ПН та РК\, звірка з ЄРПН\, додатки. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:СТРОК ПДВ: Подати декларацію з ПДВ за жовтень
+TRIGGER:-PT15H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:0bfbf0ff-077d-4c80-b053-a250bbb65128@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261113
+DTEND;VALUE=DATE:20261114
+SUMMARY:Почати: Подати декларацію з ПДВ за жовтень (строк 20.11)
+DESCRIPTION:Реєстри виданих і отриманих ПН та РК\, звірка з ЄРПН\, додатки. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Почати: Подати декларацію з ПДВ за жовтень (строк 20.11)
+TRIGGER:PT9H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:6abd82af-31a8-4b72-baeb-c55ac335605c@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261125
+DTEND;VALUE=DATE:20261126
+SUMMARY:СТРОК ПДВ: Поповнити СЕА на суму\, якої бракує для сплати
+DESCRIPTION:Залишок коштів на СЕА проти суми до сплати\; платіжка на IBAN СЕА. ДПС надсилає реєстр на списання не пізніше цієї дати. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:СТРОК ПДВ: Поповнити СЕА на суму\, якої бракує для сплати
+TRIGGER:-PT15H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:963390ed-b2ad-404d-98ea-6604f705d0ac@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261123
+DTEND;VALUE=DATE:20261124
+SUMMARY:Почати: Поповнити СЕА на суму\, якої бракує для сплати (строк 25.11)
+DESCRIPTION:Залишок коштів на СЕА проти суми до сплати\; платіжка на IBAN СЕА. ДПС надсилає реєстр на списання не пізніше цієї дати. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Почати: Поповнити СЕА на суму\, якої бракує для сплати (строк 25.11)
+TRIGGER:PT9H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:19c89105-d2d5-4b2b-a561-0b62650f4a8d@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261130
+DTEND;VALUE=DATE:20261201
+SUMMARY:СТРОК ПДВ: Сплата ПДВ за жовтень (списання з СЕА)
+DESCRIPTION:Перевірити в кабінеті\, що зобов'язання погашено. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:СТРОК ПДВ: Сплата ПДВ за жовтень (списання з СЕА)
+TRIGGER:-PT15H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:df470dca-cc20-44fc-a967-f2f9f6e0de5f@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261125
+DTEND;VALUE=DATE:20261126
+SUMMARY:Почати: Сплата ПДВ за жовтень (списання з СЕА) (строк 30.11)
+DESCRIPTION:Перевірити в кабінеті\, що зобов'язання погашено. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Почати: Сплата ПДВ за жовтень (списання з СЕА) (строк 30.11)
+TRIGGER:PT9H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:6c33a71c-48e5-4f08-819b-b4844f497a85@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261205
+DTEND;VALUE=DATE:20261206
+SUMMARY:СТРОК ПДВ: Зареєструвати ПН і РК\, складені 01–15.11
+DESCRIPTION:Первинка і ПН на підпис\, ліміт реєстрації на СЕА\, КЕП. Субота: ЄРПН працює\, строк не переноситься. Краще до 04.12. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:СТРОК ПДВ: Зареєструвати ПН і РК\, складені 01–15.11
+TRIGGER:-PT15H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:59e13fcb-f67d-4805-88e9-58e154aff911@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261203
+DTEND;VALUE=DATE:20261204
+SUMMARY:Почати: Зареєструвати ПН і РК\, складені 01–15.11 (строк 05.12)
+DESCRIPTION:Первинка і ПН на підпис\, ліміт реєстрації на СЕА\, КЕП. Субота: ЄРПН працює\, строк не переноситься. Краще до 04.12. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Почати: Зареєструвати ПН і РК\, складені 01–15.11 (строк 05.12)
+TRIGGER:PT9H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:fb2967b5-8405-43ec-868f-d378eb56b17d@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261218
+DTEND;VALUE=DATE:20261219
+SUMMARY:СТРОК ПДВ: Зареєструвати ПН і РК\, складені 16–30.11
+DESCRIPTION:Первинка і ПН на підпис\, ліміт реєстрації на СЕА\, КЕП. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:СТРОК ПДВ: Зареєструвати ПН і РК\, складені 16–30.11
+TRIGGER:-PT15H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:9d7d4da7-cd94-4f34-9e87-1eb6567af5d0@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261216
+DTEND;VALUE=DATE:20261217
+SUMMARY:Почати: Зареєструвати ПН і РК\, складені 16–30.11 (строк 18.12)
+DESCRIPTION:Первинка і ПН на підпис\, ліміт реєстрації на СЕА\, КЕП. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Почати: Зареєструвати ПН і РК\, складені 16–30.11 (строк 18.12)
+TRIGGER:PT9H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:2e1b1bde-598d-477f-8320-559fd4a8945f@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261221
+DTEND;VALUE=DATE:20261222
+SUMMARY:СТРОК ПДВ: Подати декларацію з ПДВ за листопад
+DESCRIPTION:Реєстри виданих і отриманих ПН та РК\, звірка з ЄРПН\, додатки. 20.12 — неділя\, строк переноситься на понеділок. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:СТРОК ПДВ: Подати декларацію з ПДВ за листопад
+TRIGGER:-PT15H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:f2f8025a-16d6-4414-815c-248ed46b303b@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261214
+DTEND;VALUE=DATE:20261215
+SUMMARY:Почати: Подати декларацію з ПДВ за листопад (строк 21.12)
+DESCRIPTION:Реєстри виданих і отриманих ПН та РК\, звірка з ЄРПН\, додатки. 20.12 — неділя\, строк переноситься на понеділок. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Почати: Подати декларацію з ПДВ за листопад (строк 21.12)
+TRIGGER:PT9H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:0e94fb31-ed6a-43e1-87a7-62df9c972d52@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261228
+DTEND;VALUE=DATE:20261229
+SUMMARY:СТРОК ПДВ: Поповнити СЕА на суму\, якої бракує для сплати
+DESCRIPTION:Залишок коштів на СЕА проти суми до сплати\; платіжка на IBAN СЕА. ДПС надсилає реєстр на списання не пізніше цієї дати. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:СТРОК ПДВ: Поповнити СЕА на суму\, якої бракує для сплати
+TRIGGER:-PT15H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:872438fc-34e6-4c82-b3a6-484f1d5d90a0@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261224
+DTEND;VALUE=DATE:20261225
+SUMMARY:Почати: Поповнити СЕА на суму\, якої бракує для сплати (строк 28.12)
+DESCRIPTION:Залишок коштів на СЕА проти суми до сплати\; платіжка на IBAN СЕА. ДПС надсилає реєстр на списання не пізніше цієї дати. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Почати: Поповнити СЕА на суму\, якої бракує для сплати (строк 28.12)
+TRIGGER:PT9H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:55a4400a-e73c-43db-9ce9-9492eb018e61@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261231
+DTEND;VALUE=DATE:20270101
+SUMMARY:СТРОК ПДВ: Сплата ПДВ за листопад (списання з СЕА)
+DESCRIPTION:Перевірити в кабінеті\, що зобов'язання погашено. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:СТРОК ПДВ: Сплата ПДВ за листопад (списання з СЕА)
+TRIGGER:-PT15H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:c15c5ed1-5263-4634-8433-d254787127ca@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261228
+DTEND;VALUE=DATE:20261229
+SUMMARY:Почати: Сплата ПДВ за листопад (списання з СЕА) (строк 31.12)
+DESCRIPTION:Перевірити в кабінеті\, що зобов'язання погашено. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Почати: Сплата ПДВ за листопад (списання з СЕА) (строк 31.12)
+TRIGGER:PT9H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:052c170e-8149-4ead-a197-83d95bab452f@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20270105
+DTEND;VALUE=DATE:20270106
+SUMMARY:СТРОК ПДВ: Зареєструвати ПН і РК\, складені 01–15.12
+DESCRIPTION:Первинка і ПН на підпис\, ліміт реєстрації на СЕА\, КЕП. Почніть до свят\, щоб не реєструвати в останній день. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:СТРОК ПДВ: Зареєструвати ПН і РК\, складені 01–15.12
+TRIGGER:-PT15H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:101018d6-5083-4e86-a08f-ad7dcff49075@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20261230
+DTEND;VALUE=DATE:20261231
+SUMMARY:Почати: Зареєструвати ПН і РК\, складені 01–15.12 (строк 05.01)
+DESCRIPTION:Первинка і ПН на підпис\, ліміт реєстрації на СЕА\, КЕП. Почніть до свят\, щоб не реєструвати в останній день. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Почати: Зареєструвати ПН і РК\, складені 01–15.12 (строк 05.01)
+TRIGGER:PT9H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:0c3a018c-6574-4872-8e97-4e78afb10b07@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20270118
+DTEND;VALUE=DATE:20270119
+SUMMARY:СТРОК ПДВ: Зареєструвати ПН і РК\, складені 16–31.12
+DESCRIPTION:Первинка і ПН на підпис\, ліміт реєстрації на СЕА\, КЕП. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:СТРОК ПДВ: Зареєструвати ПН і РК\, складені 16–31.12
+TRIGGER:-PT15H
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+UID:903e105d-ce24-4ee0-af7b-e04ac5182b96@nk
+DTSTAMP:20261031T145647Z
+DTSTART;VALUE=DATE:20270114
+DTEND;VALUE=DATE:20270115
+SUMMARY:Почати: Зареєструвати ПН і РК\, складені 16–31.12 (строк 18.01)
+DESCRIPTION:Первинка і ПН на підпис\, ліміт реєстрації на СЕА\, КЕП. Розбори: t.me/buhgalteriya_layfhaki_bot
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Почати: Зареєструвати ПН і РК\, складені 16–31.12 (строк 18.01)
+TRIGGER:PT9H
+END:VALARM
+END:VEVENT
+END:VCALENDAR
