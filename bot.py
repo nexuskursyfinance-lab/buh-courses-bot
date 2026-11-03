@@ -46,6 +46,7 @@ from database import (
     create_payment, confirm_payment, get_pending_payments, check_rate_limit, get_stats,
     has_purchased, get_user_purchases,
     list_posts, get_post, update_post, due_posts, busy_slots,
+    meta_get, meta_set, pn_reminder_set, pn_reminder_enabled, pn_reminder_users,
 )
 from liqpay_helper import generate_payment_url, check_payment_status
 from pdf_nk import generate_nk_pdf, build_nk_filename
@@ -310,12 +311,146 @@ async def send_question_pdf(message: Message, q: dict, telegram_id: int):
             reply_markup=back.as_markup(),
         )
         log.info(f"PDF надіслано: question_id={q['id']}, user={telegram_id}")
+        await send_bonuses(message, q, g, telegram_id)
     except Exception as e:
         log.exception(f"PDF не згенеровано для question_id={q['id']}, user={telegram_id}: {e}")
         g = question_content(q) or {}
         text = f"<b>{esc(q['title'])}</b>\n\n{tg_safe(g.get('answer') or q.get('answer', ''))}"
         await message.answer(text[:4000] + "\n\n⚠️ PDF тимчасово недоступний — напишіть нам, надішлемо вручну.",
                              reply_markup=back.as_markup())
+
+
+# =====================================================================
+# БОНУСИ ПОКУПЦЮ: «Як пояснити директору» і «Будильник ПН» (ГП-01)
+# =====================================================================
+
+PN_REMINDER_CODE = "ГП-01"
+SIGNATURE = "— Бухгалтерські лайфхаки NK · t.me/buhgalteriya_layfhaki_bot"
+
+
+def kb_pn_reminder(enabled: bool) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    if enabled:
+        b.button(text="🔕 Вимкнути «Будильник ПН»", callback_data="pnrem:off")
+    else:
+        b.button(text="🔔 Увімкнути «Будильник ПН»", callback_data="pnrem:on")
+    return b.as_markup()
+
+
+PN_REMINDER_INFO = (
+    "🎁 <b>Бонус до ГП-01: «Будильник ПН»</b>\n\n"
+    "Бот нагадуватиме вам щомісяця:\n"
+    "▫️ <b>3 числа</b> — до 5-го зареєструвати ПН і РК, складені з 1 по 15 число минулого місяця;\n"
+    "▫️ <b>16 числа</b> — до 18-го зареєструвати ПН і РК, складені з 16 числа до кінця минулого місяця.\n\n"
+    "Вимкнути можна будь-коли кнопкою або командою /budylnyk."
+)
+
+
+async def send_bonuses(message: Message, q: dict, g: dict, telegram_id: int):
+    """Після PDF: текст для директора (якщо є в gp_content) і будильник для ГП-01."""
+    try:
+        director = (g or {}).get("director")
+        if director:
+            await message.answer("📩 <b>Як пояснити директору</b>\n"
+                                 "Бонус до розбору: перешліть або скопіюйте текст нижче. "
+                                 "Слова в [дужках] замініть своїми даними.")
+            await message.answer(f"{esc(director)}\n\n{SIGNATURE}", disable_web_page_preview=True)
+        if (q.get("code") or "") == PN_REMINDER_CODE:
+            on = pn_reminder_enabled(telegram_id)
+            text = PN_REMINDER_INFO + ("\n\n✅ Будильник уже увімкнено." if on else "")
+            await message.answer(text, reply_markup=kb_pn_reminder(on))
+    except Exception:
+        log.exception(f"bonus send failed: question_id={q.get('id')}, user={telegram_id}")
+
+
+def owns_pn_reminder(telegram_id: int) -> bool:
+    q = get_question_by_code(PN_REMINDER_CODE)
+    return bool(q) and has_purchased(telegram_id, "question", q["id"])
+
+
+@dp.callback_query(F.data.startswith("pnrem:"))
+async def cb_pn_reminder(call: CallbackQuery):
+    if not owns_pn_reminder(call.from_user.id):
+        await call.answer("Будильник ПН — бонус для покупців ГП-01.", show_alert=True)
+        return
+    on = call.data.endswith(":on")
+    pn_reminder_set(call.from_user.id, on)
+    log.info(f"PN reminder {'ON' if on else 'OFF'} -> {call.from_user.id}")
+    await call.answer("🔔 Увімкнено" if on else "🔕 Вимкнено")
+    await safe_edit(call, PN_REMINDER_INFO + ("\n\n✅ Будильник увімкнено." if on else "\n\n🔕 Будильник вимкнено."),
+                    kb_pn_reminder(on))
+
+
+@dp.message(Command("budylnyk"))
+async def cmd_pn_reminder(message: Message):
+    tid = message.from_user.id
+    if not owns_pn_reminder(tid):
+        q = get_question_by_code(PN_REMINDER_CODE)
+        b = InlineKeyboardBuilder()
+        if q:
+            b.button(text="📄 Відкрити ГП-01", callback_data=f"q:{q['id']}")
+        b.button(text="🏠 Меню", callback_data="menu")
+        b.adjust(1)
+        await message.answer("🔔 «Будильник ПН» — бонус для покупців ГП-01 "
+                             "(штраф за прострочку реєстрації ПН).", reply_markup=b.as_markup())
+        return
+    on = pn_reminder_enabled(tid)
+    await message.answer(PN_REMINDER_INFO + ("\n\n✅ Зараз увімкнено." if on else "\n\n🔕 Зараз вимкнено."),
+                         reply_markup=kb_pn_reminder(on))
+
+
+MONTHS_GEN = ["січня", "лютого", "березня", "квітня", "травня", "червня",
+              "липня", "серпня", "вересня", "жовтня", "листопада", "грудня"]
+# Строки 5 і 18 числа — п. 89 підрозд. 2 розд. XX ПКУ, лише поки діє воєнний стан.
+MARTIAL_LAW_UNTIL = datetime(2027, 1, 29).date()
+
+
+def pn_reminder_text(today) -> str:
+    prev_m = (today.month - 2) % 12
+    prev = MONTHS_GEN[prev_m]
+    cur = MONTHS_GEN[today.month - 1]
+    if today.day == 3:
+        return (f"🔔 <b>Будильник ПН</b>\n\n"
+                f"До <b>5 {cur}</b> — реєстрація ПН і РК, складених <b>з 1 по 15 {prev}</b>.\n\n"
+                f"Якщо 5-те припадає на вихідний, строк не переноситься.\n\n"
+                f"Вимкнути: /budylnyk")
+    return (f"🔔 <b>Будильник ПН</b>\n\n"
+            f"До <b>18 {cur}</b> — реєстрація ПН і РК, складених <b>з 16 {prev} до кінця місяця</b>.\n\n"
+            f"Якщо 18-те припадає на вихідний, строк не переноситься.\n\n"
+            f"Вимкнути: /budylnyk")
+
+
+async def pn_reminder_tick():
+    """3 і 16 числа о 9:00 за Києвом — один раз на дату (позначка в meta)."""
+    now = datetime.now(KYIV)
+    today = now.date()
+    if today.day not in (3, 16) or now.hour < 9:
+        return
+    key = f"pn_reminder_sent:{today.isoformat()}"
+    if meta_get(key):
+        return
+    meta_set(key, "running")
+    if today > MARTIAL_LAW_UNTIL:
+        if ADMIN_ID:
+            await bot.send_message(ADMIN_ID, "⚠️ Будильник ПН не надіслано: воєнний стан за даними бота закінчився "
+                                             "29.01.2027. Перевірте строки реєстрації ПН і оновіть MARTIAL_LAW_UNTIL.")
+        meta_set(key, "skipped")
+        return
+    text = pn_reminder_text(today)
+    sent = failed = 0
+    for tid in pn_reminder_users():
+        try:
+            await bot.send_message(tid, text)
+            sent += 1
+        except Exception as e:
+            failed += 1
+            if "blocked" in str(e).lower() or "deactivated" in str(e).lower():
+                pn_reminder_set(tid, False)
+        await asyncio.sleep(0.05)
+    meta_set(key, f"sent={sent};failed={failed}")
+    log.info(f"PN reminder {today}: sent={sent}, failed={failed}")
+    if ADMIN_ID and (sent or failed):
+        await bot.send_message(ADMIN_ID, f"🔔 Будильник ПН {today:%d.%m}: надіслано {sent}, помилок {failed}.")
 
 
 # =====================================================================
@@ -915,6 +1050,10 @@ async def scheduler_loop():
                                                              f"{esc(str(e))[:300]}\nВідкрийте /queue")
         except Exception:
             log.exception("scheduler tick failed")
+        try:
+            await pn_reminder_tick()
+        except Exception:
+            log.exception("pn reminder tick failed")
         await asyncio.sleep(60)
 
 

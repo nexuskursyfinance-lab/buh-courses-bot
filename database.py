@@ -243,8 +243,51 @@ def migrate():
         k TEXT PRIMARY KEY,
         v TEXT
     )""")
+    big = "BIGINT" if USE_POSTGRES else "INTEGER"
+    cur.execute(f"""CREATE TABLE IF NOT EXISTS pn_reminders (
+        telegram_id {big} PRIMARY KEY,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT
+    )""")
     conn.commit()
     conn.close()
+
+
+# ── «Будильник ПН» (бонус до ГП-01) ─────────────────────────────────────
+
+def pn_reminder_set(telegram_id, enabled):
+    from datetime import datetime, timezone
+    conn = get_connection()
+    cur = conn.cursor()
+    p = _ph()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    if USE_POSTGRES:
+        cur.execute(f"INSERT INTO pn_reminders (telegram_id, enabled, updated_at) VALUES ({p}, {p}, {p}) "
+                    f"ON CONFLICT (telegram_id) DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = EXCLUDED.updated_at",
+                    (telegram_id, int(enabled), now))
+    else:
+        cur.execute(f"INSERT OR REPLACE INTO pn_reminders (telegram_id, enabled, updated_at) VALUES ({p}, {p}, {p})",
+                    (telegram_id, int(enabled), now))
+    conn.commit()
+    conn.close()
+
+
+def pn_reminder_enabled(telegram_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(f"SELECT enabled FROM pn_reminders WHERE telegram_id = {_ph()}", (telegram_id,))
+    row = cur.fetchone()
+    conn.close()
+    return bool(row and dict(row)["enabled"])
+
+
+def pn_reminder_users():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT telegram_id FROM pn_reminders WHERE enabled = 1")
+    rows = [dict(r)["telegram_id"] for r in cur.fetchall()]
+    conn.close()
+    return rows
 
 
 def ensure_default_subtopics():
