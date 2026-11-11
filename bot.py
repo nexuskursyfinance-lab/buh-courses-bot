@@ -94,6 +94,7 @@ def free_items() -> list:
         return []
 
 VIBER_CHANNEL_URL = os.getenv("VIBER_CHANNEL_URL", "https://invite.viber.com/?g2=AQBPWuCs%2BE1%2F%2F1c%2BLvcR94IxNaSXZizpgqc8p5lIdsJRCTBZeW8%2FmItyOp5Api1y")
+WHATSAPP_URL = os.getenv("WHATSAPP_URL", "https://chat.whatsapp.com/Hsla8xwJb2rDFFaBRWRacf")
 VIBER_CHAT_URL = os.getenv("VIBER_CHAT_URL", "https://invite.viber.com/?g2=AQBvkk%2FKfZwBJlc%2BL7l9DtVJhNxDayFpxdr237eG1w2Rrl3RJ8hRNomscFPzMBUV")
 
 OFFER_URL = os.getenv(
@@ -184,6 +185,7 @@ def kb_main_menu() -> InlineKeyboardMarkup:
     b.button(text="🔎 Пошук за словом", callback_data="search")
     b.button(text="📦 Мої покупки", callback_data="mine")
     b.button(text="📲 Ми у Viber", callback_data="viber")
+    b.button(text="💬 Ми у WhatsApp", url=WHATSAPP_URL)
     b.adjust(1)
     return b.as_markup()
 
@@ -575,6 +577,7 @@ async def cmd_help(message: Message):
         "/info — інформація про компанію\n"
         "/free — безкоштовні календарі й пам'ятки\n"
         "/viber — ми у Viber\n"
+        "/whatsapp — ми у WhatsApp\n"
         "/help — ця довідка\n\n"
         "Питання чи проблеми з оплатою?\n"
         "📧 nexus.kursy.finance@gmail.com\n"
@@ -694,6 +697,17 @@ async def cb_viber(call: CallbackQuery):
 @dp.message(Command("viber"))
 async def cmd_viber(message: Message):
     await message.answer(VIBER_TEXT, reply_markup=kb_viber(), disable_web_page_preview=True)
+
+
+@dp.message(Command("whatsapp"))
+async def cmd_whatsapp(message: Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 Спільнота у WhatsApp", url=WHATSAPP_URL)],
+        [InlineKeyboardButton(text="🏠 Меню", callback_data="menu")],
+    ])
+    await message.answer("💬 <b>Бухгалтерські лайфхаки у WhatsApp</b>\n\n"
+                         "Ті самі гарячі питання з нормою і прикладом. Повні розбори (PDF) — тут, у боті.",
+                         reply_markup=kb, disable_web_page_preview=True)
 
 
 @dp.callback_query(F.data == "search")
